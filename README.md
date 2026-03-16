@@ -124,7 +124,7 @@ Start the dev server:
 npm run dev
 ```
 
-Then open `http://localhost:3000`.
+Then open `http://localhost:8080`.
 
 ## Docker and ECS
 
@@ -137,7 +137,7 @@ docker build -t sodacircle .
 Run it locally:
 
 ```bash
-docker run --env-file .env.example -p 3000:3000 sodacircle
+docker run --env-file .env.example -p 8080:8080 sodacircle
 ```
 
 Deployment helpers:

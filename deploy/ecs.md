@@ -4,7 +4,7 @@ This project is containerized for ECS using the root `Dockerfile`.
 
 ## Container settings
 
-- Container port: `3000`
+- Container port: `8080`
 - Health check path: `/`
 - Start command: `node server.js`
 - Runtime image source: Docker build from the repo root
@@ -23,7 +23,7 @@ Use the values in `.env.example` as the baseline.
 Minimum runtime env:
 
 - `NODE_ENV=production`
-- `PORT=3000`
+- `PORT=8080`
 - `HOSTNAME=0.0.0.0`
 - `AWS_REGION=<your-region>`
 - `APP_URL=<public-app-url>`
@@ -59,7 +59,7 @@ Use these values in your Union Station ECS service configuration:
 
 - Build context: repo root
 - Dockerfile path: `Dockerfile`
-- Container port: `3000`
+- Container port: `8080`
 - Health check path: `/`
 - Start command: default image command
 - Environment variables: from `.env.example`
