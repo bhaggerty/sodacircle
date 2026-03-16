@@ -126,6 +126,26 @@ npm run dev
 
 Then open `http://localhost:3000`.
 
+## Docker and ECS
+
+Build the production image:
+
+```bash
+docker build -t sodacircle .
+```
+
+Run it locally:
+
+```bash
+docker run --env-file .env.example -p 3000:3000 sodacircle
+```
+
+Deployment helpers:
+
+- `Dockerfile`
+- `.env.example`
+- `deploy/ecs.md`
+
 ## Notes
 
 - This repo currently uses mocked data and local client-side state.
@@ -140,6 +160,7 @@ Then open `http://localhost:3000`.
 - Add auth
 - Add email sending and delivery tracking
 - Add Slack and ATS integrations
+- Add DynamoDB-backed persistence for ECS environments
 - Replace mocked AI logic with live model calls
 
 ## Positioning
