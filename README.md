@@ -29,6 +29,7 @@ The current MVP is designed around a simple but useful loop:
 ```text
 app/
   globals.css
+  health/route.ts
   layout.tsx
   page.tsx
 components/
@@ -126,6 +127,12 @@ npm run dev
 
 Then open `http://localhost:8080`.
 
+Health check endpoint:
+
+```bash
+curl http://localhost:8080/health
+```
+
 ## Docker and ECS
 
 Build the production image:
@@ -145,6 +152,8 @@ Deployment helpers:
 - `Dockerfile`
 - `.env.example`
 - `deploy/ecs.md`
+
+For Union Station with Google OAuth enabled, allow `/health` as a public path so ECS health checks can succeed without auth.
 
 ## Notes
 

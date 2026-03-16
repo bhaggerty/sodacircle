@@ -5,7 +5,7 @@ This project is containerized for ECS using the root `Dockerfile`.
 ## Container settings
 
 - Container port: `8080`
-- Health check path: `/`
+- Health check path: `/health`
 - Start command: `node server.js`
 - Runtime image source: Docker build from the repo root
 
@@ -60,9 +60,14 @@ Use these values in your Union Station ECS service configuration:
 - Build context: repo root
 - Dockerfile path: `Dockerfile`
 - Container port: `8080`
-- Health check path: `/`
+- Health check path: `/health`
 - Start command: default image command
 - Environment variables: from `.env.example`
+
+If Google OAuth authentication is enabled in Union Station, add these public paths:
+
+- Exact: `/health`
+- Prefix: `/webhook/*` when webhook endpoints are added later
 
 ## Suggested AWS resource naming
 
