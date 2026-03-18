@@ -153,6 +153,11 @@ button, input, textarea, select { font: inherit; }
   50% { opacity: 0.7; box-shadow: 0 0 0 4px rgba(74, 222, 128, 0); }
 }
 
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 .nav-footer {
   padding: 16px 22px 24px;
   border-top: 1px solid rgba(255,255,255,0.06);

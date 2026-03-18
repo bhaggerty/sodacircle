@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useStore } from "@/lib/store";
 import { Avatar, ScoreRing } from "@/components/score-ring";
+import { AtsSyncStatus } from "@/lib/ats";
 import { CandidateStatus } from "@/lib/types";
 
 const RECOMMENDATION_LABEL: Record<string, string> = {
@@ -22,10 +23,77 @@ const STATUS_CHIP: Record<CandidateStatus, { label: string; cls: string }> = {
   "follow up later": { label: "Follow up later", cls: "chip-purple" },
 };
 
+function AtsBadge({
+  status,
+  atsUrl,
+  onSync,
+}: {
+  status: AtsSyncStatus | undefined;
+  atsUrl: string | undefined;
+  onSync: () => void;
+}) {
+  if (status === "synced") {
+    return atsUrl ? (
+      <a
+        href={atsUrl}
+        target="_blank"
+        rel="noreferrer"
+        className="chip chip-accent"
+        style={{ fontSize: "0.76rem", gap: 5, textDecoration: "none" }}
+        title="View in free-ats"
+      >
+        <span style={{ fontSize: "0.7rem" }}>●</span> In ATS
+      </a>
+    ) : (
+      <span className="chip chip-accent" style={{ fontSize: "0.76rem", gap: 5 }}>
+        <span style={{ fontSize: "0.7rem" }}>●</span> In ATS
+      </span>
+    );
+  }
+
+  if (status === "syncing") {
+    return (
+      <span className="chip chip-muted" style={{ fontSize: "0.76rem", gap: 5 }}>
+        <span style={{ fontSize: "0.7rem", animation: "spin 1s linear infinite", display: "inline-block" }}>◌</span> Syncing…
+      </span>
+    );
+  }
+
+  if (status === "error") {
+    return (
+      <button
+        className="chip chip-warn"
+        style={{ fontSize: "0.76rem", gap: 5, cursor: "pointer", border: "none" }}
+        onClick={onSync}
+        title="Sync failed — click to retry"
+      >
+        <span style={{ fontSize: "0.7rem" }}>✕</span> Retry sync
+      </button>
+    );
+  }
+
+  // idle — show manual sync button
+  return (
+    <button
+      className="chip chip-muted"
+      style={{ fontSize: "0.76rem", gap: 5, cursor: "pointer", border: "none" }}
+      onClick={onSync}
+      title="Push to free-ats"
+    >
+      <span style={{ fontSize: "0.7rem" }}>○</span> Sync to ATS
+    </button>
+  );
+}
+
 export default function CandidatesPage() {
-  const { shortlist, statuses, setCandidateStatus, setSelectedCandidateId } = useStore();
+  const {
+    shortlist, statuses, setCandidateStatus, setSelectedCandidateId,
+    atsSyncStatus, atsUrls, syncCandidateToAts, syncAllToAts,
+  } = useStore();
+
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "prioritize" | "review" | "approved">("all");
+  const [syncing, setSyncing] = useState(false);
 
   const visible = shortlist.filter((c) => {
     const matchesQuery =
@@ -33,13 +101,19 @@ export default function CandidatesPage() {
       c.name.toLowerCase().includes(query.toLowerCase()) ||
       c.company.toLowerCase().includes(query.toLowerCase()) ||
       c.title.toLowerCase().includes(query.toLowerCase());
-
     const matchesFilter =
       filter === "all" ||
       (filter === "approved" ? statuses[c.id] === "approved" : c.recommendation === filter);
-
     return matchesQuery && matchesFilter;
   });
+
+  const syncedCount = Object.values(atsSyncStatus).filter((s) => s === "synced").length;
+
+  const handleSyncAll = async () => {
+    setSyncing(true);
+    await syncAllToAts();
+    setSyncing(false);
+  };
 
   return (
     <div className="page">
@@ -49,6 +123,7 @@ export default function CandidatesPage() {
         <p className="page-subtitle">
           {shortlist.length} profiles scored against your search recipe.
           Approve strong matches to queue them for outreach.
+          {syncedCount > 0 && ` · ${syncedCount} synced to free-ats.`}
         </p>
       </div>
 
@@ -72,6 +147,14 @@ export default function CandidatesPage() {
         ))}
         <span className="spacer" />
         <span className="fine">{visible.length} of {shortlist.length} shown</span>
+        <button
+          className="btn btn-secondary btn-sm"
+          onClick={handleSyncAll}
+          disabled={syncing}
+          title="Push all unsynced candidates to free-ats"
+        >
+          {syncing ? "Syncing…" : "Sync all to ATS"}
+        </button>
       </div>
 
       {/* Candidate grid */}
@@ -96,15 +179,12 @@ export default function CandidatesPage() {
                 <ScoreRing score={c.finalScore} size={54} />
               </div>
 
-              {/* Progress bar */}
               <div className="cand-progress">
                 <div className="cand-progress-fill" style={{ width: `${c.finalScore}%` }} />
               </div>
 
-              {/* Summary */}
               <p className="cand-summary">{c.fitSummary}</p>
 
-              {/* Signals */}
               <div className="chips">
                 <span className={`chip ${recChip}`}>
                   {RECOMMENDATION_LABEL[c.recommendation]}
@@ -112,9 +192,14 @@ export default function CandidatesPage() {
                 {c.matchedSignals.slice(0, 2).map((s) => (
                   <span key={s} className="chip">{s}</span>
                 ))}
+                {/* ATS sync status */}
+                <AtsBadge
+                  status={atsSyncStatus[c.id]}
+                  atsUrl={atsUrls[c.id]}
+                  onSync={() => syncCandidateToAts(c.id)}
+                />
               </div>
 
-              {/* Risks */}
               {c.risks.length > 0 && (
                 <div className="chips">
                   {c.risks.slice(0, 2).map((r) => (
@@ -123,7 +208,6 @@ export default function CandidatesPage() {
                 </div>
               )}
 
-              {/* Actions */}
               <div className="cand-actions">
                 <button
                   className="btn btn-primary btn-sm"
