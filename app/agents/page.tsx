@@ -1,88 +1,83 @@
 "use client";
 
 import { useState } from "react";
+import { useStore } from "@/lib/store";
+import { Candidate, SearchCriteria } from "@/lib/types";
 
-type AgentStatus = "running" | "paused" | "coming-soon";
+type AgentStatus = "idle" | "running" | "paused" | "coming-soon";
 
-type Agent = {
-  id: string;
-  name: string;
-  tagline: string;
-  desc: string;
-  status: AgentStatus;
-  color: string;
-  icon: string;
-  stats: { value: string; label: string }[];
-  sources?: string[];
-  log?: { text: string; time: string }[];
+type SourcingResult = {
+  candidates: Candidate[];
+  counts: Record<string, number>;
+  keywords: string[];
+  errors: string[];
+  total: number;
 };
 
-const AGENTS: Agent[] = [
-  {
-    id: "sourcing",
-    name: "Sourcing Agent",
-    tagline: "Always on. Always finding.",
-    desc: "Continuously scans LinkedIn, GitHub, blog posts, conference speaker lists, Hacker News, and smart web searches to surface matching profiles and populate the candidate pool.",
-    status: "running",
-    color: "#1d6b52",
-    icon: "◎",
-    stats: [
-      { value: "47", label: "Found today" },
-      { value: "12", label: "This hour" },
-      { value: "312", label: "Pool total" },
-    ],
-    sources: ["LinkedIn", "GitHub", "HN", "Blogs", "Conferences", "Web"],
-    log: [
-      { text: "Found Marcus L. · CrowdStrike · match 91", time: "2m ago" },
-      { text: "Scanned /r/cscareerquestions · 3 signals", time: "8m ago" },
-      { text: "GitHub search: enterprise-security AE", time: "14m ago" },
-      { text: "LinkedIn: 23 new profiles indexed", time: "21m ago" },
-      { text: "Conference: RSA 2025 speakers scraped", time: "1h ago" },
-    ],
-  },
-  {
-    id: "scheduling",
-    name: "Scheduling Agent",
-    tagline: "No more calendar tennis.",
-    desc: "Watches candidate stage transitions and proposes interview times automatically. Sends calendar invites, handles reschedules, and keeps candidates updated — without anyone touching a calendar.",
-    status: "coming-soon",
-    color: "#b95c28",
-    icon: "◷",
-    stats: [
-      { value: "—", label: "Interviews booked" },
-      { value: "—", label: "Reschedules handled" },
-      { value: "—", label: "Hours saved" },
-    ],
-    sources: ["Google Calendar", "Outlook", "Slack"],
-  },
-  {
-    id: "feedback",
-    name: "Feedback Agent",
-    tagline: "Scorecards, without the chasing.",
-    desc: "Pings interviewers in Slack 30 minutes after each interview. Collects plain-English responses, extracts structured signals, fills scorecards in the ATS, and escalates if an interviewer ghosts.",
-    status: "coming-soon",
-    color: "#6b52a8",
-    icon: "◈",
-    stats: [
-      { value: "—", label: "Scorecards filled" },
-      { value: "—", label: "Ghosted recovered" },
-      { value: "—", label: "Avg response time" },
-    ],
-    sources: ["Slack", "ATS"],
-  },
-];
+type LogEntry = { text: string; time: string; type: "info" | "success" | "error" };
+
+function now() {
+  return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
 
 export default function AgentsPage() {
-  const [agentStatus, setAgentStatus] = useState<Record<string, AgentStatus>>(
-    Object.fromEntries(AGENTS.map((a) => [a.id, a.status]))
-  );
+  const { criteria, candidates, addCandidatesToPool } = useStore();
 
-  const toggle = (id: string) => {
-    setAgentStatus((s) => ({
-      ...s,
-      [id]: s[id] === "running" ? "paused" : "running",
-    }));
+  const [sourcingStatus, setSourcingStatus] = useState<AgentStatus>("idle");
+  const [log, setLog] = useState<LogEntry[]>([
+    { text: "Agent ready. Click Run to start sourcing.", time: now(), type: "info" },
+  ]);
+  const [lastResult, setLastResult] = useState<SourcingResult | null>(null);
+
+  const addLog = (text: string, type: LogEntry["type"] = "info") =>
+    setLog((l) => [{ text, time: now(), type }, ...l].slice(0, 40));
+
+  const runSourcing = async (sources: ("github" | "hn")[]) => {
+    setSourcingStatus("running");
+    addLog(`Starting sourcing run — ${sources.join(", ")}…`);
+    addLog(`Building search from: ${criteria.roleTitle}`);
+
+    try {
+      const res = await fetch("/api/source", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ criteria, sources }),
+      });
+
+      const data = await res.json() as SourcingResult;
+
+      if (data.keywords?.length) {
+        addLog(`Keywords used: ${data.keywords.slice(0, 5).join(", ")}`);
+      }
+
+      if (data.errors?.length) {
+        data.errors.forEach((e) => addLog(e, "error"));
+      }
+
+      if (data.counts) {
+        Object.entries(data.counts).forEach(([src, n]) =>
+          addLog(`${src}: ${n} profiles found`, n > 0 ? "success" : "info")
+        );
+      }
+
+      if (data.candidates?.length) {
+        addCandidatesToPool(data.candidates);
+        const newCount = data.candidates.filter(
+          (c) => !candidates.find((e) => e.id === c.id)
+        ).length;
+        addLog(`${newCount} new candidates added to pool · ${data.total - newCount} duplicates skipped`, "success");
+        setLastResult(data);
+      } else {
+        addLog("No matching candidates found. Try adjusting your search criteria.", "info");
+      }
+    } catch (err) {
+      addLog(`Run failed: ${String(err)}`, "error");
+    } finally {
+      setSourcingStatus("idle");
+    }
   };
+
+  const totalInPool = candidates.length;
 
   return (
     <div className="page">
@@ -90,107 +85,172 @@ export default function AgentsPage() {
         <span className="page-eyebrow">Automation layer</span>
         <h1 className="page-title">Agents</h1>
         <p className="page-subtitle">
-          Always-on workers that handle sourcing, scheduling, and feedback collection.
-          You set the criteria. They do the legwork.
+          Always-on workers that source candidates, handle scheduling, and collect interview feedback.
         </p>
       </div>
 
       <div className="agents-grid">
-        {AGENTS.map((agent) => {
-          const status = agentStatus[agent.id];
-          const isComingSoon = agent.status === "coming-soon";
 
-          return (
-            <div
-              key={agent.id}
-              className="agent-card"
-              style={{ color: agent.color } as React.CSSProperties}
-            >
-              <div className="agent-card-header">
-                <div className="row" style={{ gap: 14 }}>
-                  <div
-                    className="agent-icon-wrap"
-                    style={{ background: agent.color + "18", color: agent.color, fontSize: "1.5rem" }}
-                  >
-                    {agent.icon}
-                  </div>
-                  <div>
-                    <h3 className="agent-title" style={{ color: "var(--ink)" }}>{agent.name}</h3>
-                    <p className="fine" style={{ color: agent.color, fontWeight: 600, margin: 0 }}>
-                      {agent.tagline}
-                    </p>
-                  </div>
-                </div>
-                <span className={`status-badge ${isComingSoon ? "coming-soon" : status === "running" ? "running" : "paused"}`}>
-                  {isComingSoon ? "Coming soon" : status === "running" ? "Running" : "Paused"}
-                </span>
+        {/* ── Sourcing Agent ── */}
+        <div className="agent-card" style={{ color: "#1d6b52" } as React.CSSProperties}>
+          <div className="agent-card-header">
+            <div className="row" style={{ gap: 14 }}>
+              <div className="agent-icon-wrap" style={{ background: "#1d6b5218", color: "#1d6b52", fontSize: "1.5rem" }}>
+                ◎
               </div>
-
-              <p className="agent-desc">{agent.desc}</p>
-
-              <div className="agent-stats">
-                {agent.stats.map((s) => (
-                  <div key={s.label} className="agent-stat">
-                    <span className="agent-stat-value" style={{ color: s.value !== "—" ? agent.color : "var(--muted)" }}>
-                      {s.value}
-                    </span>
-                    <span className="agent-stat-label">{s.label}</span>
-                  </div>
-                ))}
-              </div>
-
-              {agent.sources && (
-                <div>
-                  <p className="agent-log-title">Data sources</p>
-                  <div className="agent-sources">
-                    {agent.sources.map((s) => (
-                      <span key={s} className="chip" style={{ fontSize: "0.78rem" }}>{s}</span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {agent.log && status === "running" && (
-                <div className="agent-log">
-                  <p className="agent-log-title">Activity log</p>
-                  {agent.log.map((entry, i) => (
-                    <div key={i} className="agent-log-item">
-                      {entry.text}
-                      <span className="agent-log-time">{entry.time}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <div className="agent-card-footer">
-                {!isComingSoon ? (
-                  <>
-                    <button
-                      className={`btn btn-sm ${status === "running" ? "btn-secondary" : "btn-primary"}`}
-                      style={status === "running" ? {} : { background: `linear-gradient(135deg, ${agent.color}, ${agent.color}cc)` }}
-                      onClick={() => toggle(agent.id)}
-                    >
-                      {status === "running" ? "Pause" : "Resume"}
-                    </button>
-                    <button className="btn btn-ghost btn-sm">Configure</button>
-                    <button className="btn btn-ghost btn-sm">View logs</button>
-                  </>
-                ) : (
-                  <button className="btn btn-ghost btn-sm" disabled style={{ opacity: 0.5, cursor: "not-allowed" }}>
-                    Not yet available
-                  </button>
-                )}
+              <div>
+                <h3 className="agent-title" style={{ color: "var(--ink)" }}>Sourcing Agent</h3>
+                <p className="fine" style={{ color: "#1d6b52", fontWeight: 600, margin: 0 }}>
+                  Always scanning. Always finding.
+                </p>
               </div>
             </div>
-          );
-        })}
+            <span className={`status-badge ${sourcingStatus === "running" ? "running" : "paused"}`}>
+              {sourcingStatus === "running" ? "Running" : "Idle"}
+            </span>
+          </div>
+
+          <p className="agent-desc">
+            Searches GitHub and Hacker News "Who wants to be hired" threads for profiles
+            matching your search recipe. Every profile found is pushed to free-ats automatically.
+            LinkedIn, conference speakers, and web search coming next.
+          </p>
+
+          <div className="agent-stats">
+            <div className="agent-stat">
+              <span className="agent-stat-value" style={{ color: totalInPool > 0 ? "#1d6b52" : "var(--muted)" }}>
+                {totalInPool}
+              </span>
+              <span className="agent-stat-label">In pool</span>
+            </div>
+            <div className="agent-stat">
+              <span className="agent-stat-value" style={{ color: lastResult?.total ? "#1d6b52" : "var(--muted)" }}>
+                {lastResult?.total ?? "—"}
+              </span>
+              <span className="agent-stat-label">Last run</span>
+            </div>
+            <div className="agent-stat">
+              <span className="agent-stat-value" style={{ color: "var(--muted)" }}>
+                {lastResult ? "just now" : "—"}
+              </span>
+              <span className="agent-stat-label">Last sourced</span>
+            </div>
+          </div>
+
+          {/* Active search context */}
+          <div className="agent-log">
+            <p className="agent-log-title">Current search</p>
+            <div className="chips" style={{ gap: 7 }}>
+              <span className="chip chip-accent" style={{ fontSize: "0.78rem" }}>{criteria.roleTitle}</span>
+              {criteria.searchRecipe.industry.map((i) => (
+                <span key={i} className="chip" style={{ fontSize: "0.78rem" }}>{i}</span>
+              ))}
+              {criteria.mustHaves.slice(0, 2).map((m) => (
+                <span key={m} className="chip chip-muted" style={{ fontSize: "0.78rem" }}>{m}</span>
+              ))}
+            </div>
+          </div>
+
+          {/* Sources */}
+          <div>
+            <p className="agent-log-title">Active sources</p>
+            <div className="agent-sources">
+              {[
+                { name: "GitHub", active: true },
+                { name: "Hacker News", active: true },
+                { name: "LinkedIn", active: false },
+                { name: "Conferences", active: false },
+                { name: "Blogs", active: false },
+                { name: "Web search", active: false },
+              ].map((s) => (
+                <span
+                  key={s.name}
+                  className={`chip ${s.active ? "chip-accent" : "chip-muted"}`}
+                  style={{ fontSize: "0.78rem" }}
+                >
+                  {s.active ? "● " : "○ "}{s.name}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          {/* Live log */}
+          <div className="agent-log">
+            <p className="agent-log-title">Activity log</p>
+            {log.slice(0, 8).map((entry, i) => (
+              <div
+                key={i}
+                className="agent-log-item"
+                style={{
+                  color: entry.type === "success"
+                    ? "#1d6b52"
+                    : entry.type === "error"
+                    ? "#c2410c"
+                    : "var(--ink-soft)",
+                }}
+              >
+                {entry.text}
+                <span className="agent-log-time">{entry.time}</span>
+              </div>
+            ))}
+          </div>
+
+          <div className="agent-card-footer">
+            <button
+              className="btn btn-primary btn-sm"
+              style={{ background: "linear-gradient(135deg, #1d6b52, #174c3c)" }}
+              onClick={() => runSourcing(["github", "hn"])}
+              disabled={sourcingStatus === "running"}
+            >
+              {sourcingStatus === "running" ? "Running…" : "Run now"}
+            </button>
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => runSourcing(["github"])}
+              disabled={sourcingStatus === "running"}
+            >
+              GitHub only
+            </button>
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => runSourcing(["hn"])}
+              disabled={sourcingStatus === "running"}
+            >
+              HN only
+            </button>
+          </div>
+        </div>
+
+        {/* ── Scheduling Agent ── */}
+        <AgentStub
+          icon="◷"
+          color="#b95c28"
+          name="Scheduling Agent"
+          tagline="No more calendar tennis."
+          desc="Watches candidate stage transitions and proposes interview times automatically. Sends calendar invites, handles reschedules, and keeps candidates updated — without anyone touching a calendar."
+          sources={["Google Calendar", "Outlook", "Slack"]}
+        />
+
+        {/* ── Feedback Agent ── */}
+        <AgentStub
+          icon="◈"
+          color="#6b52a8"
+          name="Feedback Agent"
+          tagline="Scorecards, without the chasing."
+          desc="Pings interviewers in Slack 30 minutes after each interview. Collects plain-English responses, extracts structured signals, fills scorecards in free-ats, and escalates if an interviewer ghosts."
+          sources={["Slack", "free-ats"]}
+        />
+
       </div>
 
-      {/* Future agents */}
+      {/* Roadmap */}
       <div className="card card-pad" style={{ marginTop: 24 }}>
         <p className="section-label" style={{ marginBottom: 14 }}>On the roadmap</p>
         <div className="chips">
           {[
+            "LinkedIn sourcing",
+            "Conference speaker scraping",
+            "Smart Google search",
             "Debrief Facilitator",
             "Offer Approval Agent",
             "Candidate Comms Agent",
@@ -200,6 +260,56 @@ export default function AgentsPage() {
             <span key={name} className="chip chip-muted">{name}</span>
           ))}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function AgentStub({
+  icon, color, name, tagline, desc, sources,
+}: {
+  icon: string;
+  color: string;
+  name: string;
+  tagline: string;
+  desc: string;
+  sources: string[];
+}) {
+  return (
+    <div className="agent-card" style={{ color } as React.CSSProperties}>
+      <div className="agent-card-header">
+        <div className="row" style={{ gap: 14 }}>
+          <div className="agent-icon-wrap" style={{ background: color + "18", color, fontSize: "1.5rem" }}>
+            {icon}
+          </div>
+          <div>
+            <h3 className="agent-title" style={{ color: "var(--ink)" }}>{name}</h3>
+            <p className="fine" style={{ color, fontWeight: 600, margin: 0 }}>{tagline}</p>
+          </div>
+        </div>
+        <span className="status-badge coming-soon">Coming soon</span>
+      </div>
+      <p className="agent-desc">{desc}</p>
+      <div className="agent-stats">
+        {["Handled", "Saved (hrs)", "Last run"].map((label) => (
+          <div key={label} className="agent-stat">
+            <span className="agent-stat-value" style={{ color: "var(--muted)" }}>—</span>
+            <span className="agent-stat-label">{label}</span>
+          </div>
+        ))}
+      </div>
+      <div>
+        <p className="agent-log-title">Planned sources</p>
+        <div className="agent-sources">
+          {sources.map((s) => (
+            <span key={s} className="chip chip-muted" style={{ fontSize: "0.78rem" }}>○ {s}</span>
+          ))}
+        </div>
+      </div>
+      <div className="agent-card-footer">
+        <button className="btn btn-ghost btn-sm" disabled style={{ opacity: 0.45, cursor: "not-allowed" }}>
+          Not yet available
+        </button>
       </div>
     </div>
   );

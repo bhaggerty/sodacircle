@@ -41,6 +41,7 @@ type StoreCtx = {
   setCriteria: (v: SearchCriteria) => void;
   candidates: Candidate[];
   shortlist: RankedCandidate[];
+  addCandidatesToPool: (incoming: Candidate[]) => void;
   selectedCandidateId: string;
   setSelectedCandidateId: (id: string) => void;
   statuses: Record<string, CandidateStatus>;
@@ -181,6 +182,29 @@ export function AppProvider({ children }: { children: ReactNode }) {
     refreshRanking(next);
   };
 
+  const addCandidatesToPool = useCallback((incoming: Candidate[]) => {
+    setCandidates((current) => {
+      const existingIds = new Set(current.map((c) => c.id));
+      const existingLinks = new Set(current.map((c) => c.linkedinUrl).filter(Boolean));
+      const fresh = incoming.filter(
+        (c) => !existingIds.has(c.id) && (!c.linkedinUrl || !existingLinks.has(c.linkedinUrl))
+      );
+      if (!fresh.length) return current;
+      const merged = [...current, ...fresh];
+      const ranked = rankCandidates(merged, criteria);
+      setShortlist(ranked);
+      // Auto-push fresh candidates to ATS in the background
+      fresh.forEach((c) => {
+        pushCandidateToAts(c).then((result) => {
+          setAtsSyncStatus((s) => ({ ...s, [c.id]: result.ok ? "synced" : "error" }));
+          if (result.ok && result.atsUrl) setAtsUrls((u) => ({ ...u, [c.id]: result.atsUrl }));
+        });
+        setAtsSyncStatus((s) => ({ ...s, [c.id]: "syncing" }));
+      });
+      return merged;
+    });
+  }, [criteria]);
+
   const setCandidateStatus = (id: string, status: CandidateStatus) => {
     setStatuses((s) => ({ ...s, [id]: status }));
     // Ensure approved candidates are always in the ATS
@@ -204,6 +228,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       selectedCandidate, outreachDraft,
       handleExtractCriteria, handleCsvUpload, handleTagChange,
       setCandidateStatus,
+      addCandidatesToPool,
       replies: sampleReplies,
       atsSyncStatus, atsUrls,
       syncCandidateToAts, syncAllToAts,
