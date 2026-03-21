@@ -621,25 +621,6 @@ export default function AgentsPage() {
           </div>
         </div>
 
-        {/* ── Scheduling Agent ── */}
-        <AgentStub
-          icon="◷"
-          color="#b95c28"
-          name="Scheduling Agent"
-          tagline="No more calendar tennis."
-          desc="Watches candidate stage transitions and proposes interview times automatically. Sends calendar invites, handles reschedules, and keeps candidates updated — without anyone touching a calendar."
-          sources={["Google Calendar", "Outlook", "Slack"]}
-        />
-
-        {/* ── Feedback Agent ── */}
-        <AgentStub
-          icon="◈"
-          color="#6b52a8"
-          name="Feedback Agent"
-          tagline="Scorecards, without the chasing."
-          desc="Pings interviewers in Slack 30 minutes after each interview. Collects plain-English responses, extracts structured signals, fills scorecards in free-ats, and escalates if an interviewer ghosts."
-          sources={["Slack", "free-ats"]}
-        />
 
       </div>
 
@@ -648,24 +629,6 @@ export default function AgentsPage() {
         <TalentInsights shortlist={shortlist} lastResult={lastResult} />
       )}
 
-      {/* Roadmap */}
-      <div className="card card-pad" style={{ marginTop: 24 }}>
-        <p className="section-label" style={{ marginBottom: 14 }}>On the roadmap</p>
-        <div className="chips">
-          {[
-            "LinkedIn sourcing",
-            "Conference speaker scraping",
-            "Smart Google search",
-            "Debrief Facilitator",
-            "Offer Approval Agent",
-            "Candidate Comms Agent",
-            "Pipeline Health Monitor",
-            "Onboarding Handoff",
-          ].map((name) => (
-            <span key={name} className="chip chip-muted">{name}</span>
-          ))}
-        </div>
-      </div>
     </div>
   );
 }
@@ -771,52 +734,3 @@ function TalentInsights({ shortlist, lastResult }: { shortlist: RankedCandidate[
   );
 }
 
-function AgentStub({
-  icon, color, name, tagline, desc, sources,
-}: {
-  icon: string;
-  color: string;
-  name: string;
-  tagline: string;
-  desc: string;
-  sources: string[];
-}) {
-  return (
-    <div className="agent-card" style={{ color } as React.CSSProperties}>
-      <div className="agent-card-header">
-        <div className="row" style={{ gap: 14 }}>
-          <div className="agent-icon-wrap" style={{ background: color + "18", color, fontSize: "1.5rem" }}>
-            {icon}
-          </div>
-          <div>
-            <h3 className="agent-title" style={{ color: "var(--ink)" }}>{name}</h3>
-            <p className="fine" style={{ color, fontWeight: 600, margin: 0 }}>{tagline}</p>
-          </div>
-        </div>
-        <span className="status-badge coming-soon">Coming soon</span>
-      </div>
-      <p className="agent-desc">{desc}</p>
-      <div className="agent-stats">
-        {["Handled", "Saved (hrs)", "Last run"].map((label) => (
-          <div key={label} className="agent-stat">
-            <span className="agent-stat-value" style={{ color: "var(--muted)" }}>—</span>
-            <span className="agent-stat-label">{label}</span>
-          </div>
-        ))}
-      </div>
-      <div>
-        <p className="agent-log-title">Planned sources</p>
-        <div className="agent-sources">
-          {sources.map((s) => (
-            <span key={s} className="chip chip-muted" style={{ fontSize: "0.78rem" }}>○ {s}</span>
-          ))}
-        </div>
-      </div>
-      <div className="agent-card-footer">
-        <button className="btn btn-ghost btn-sm" disabled style={{ opacity: 0.45, cursor: "not-allowed" }}>
-          Not yet available
-        </button>
-      </div>
-    </div>
-  );
-}
