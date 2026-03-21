@@ -13,6 +13,7 @@ import { searchGithub } from "@/lib/sources/github";
 import { searchHn, searchHnByKeyword } from "@/lib/sources/hn";
 import { generateSearchKeywords } from "@/lib/claude";
 import { SearchCriteria, Candidate } from "@/lib/types";
+import { appendProfile } from "@/lib/crawler/store";
 
 function dedup(candidates: Candidate[]): Candidate[] {
   const seen = new Set<string>();
@@ -116,6 +117,28 @@ export async function POST(req: NextRequest) {
   }
 
   const candidates = dedup(allCandidates);
+
+  // Persist sourced candidates to DynamoDB so they appear in profile search.
+  // Fire-and-forget — don't block the response.
+  Promise.allSettled(
+    candidates.map((c) =>
+      appendProfile({
+        id:          c.id,
+        name:        c.name,
+        title:       c.title,
+        company:     c.company,
+        location:    c.location,
+        bio:         c.summary,
+        skills:      [],
+        email:       c.email,
+        githubUrl:   "",
+        linkedinUrl: c.linkedinUrl,
+        sourceUrl:   "",
+        sourceName:  c.sourceName === "github" ? "github" : "web",
+        indexedAt:   new Date().toISOString(),
+      })
+    )
+  ).catch(() => {});
 
   return NextResponse.json({
     candidates,

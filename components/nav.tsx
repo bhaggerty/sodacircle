@@ -27,6 +27,7 @@ export function Nav() {
     { href: "/replies",    label: "Replies",   icon: iconChat,   badge: repliesPending > 0 ? repliesPending : null },
     { href: "/agents",     label: "Agents",    icon: iconAgent,  pulse: true },
     { href: "/profiles",   label: "Profiles",  icon: iconDb },
+    { href: "/admin",      label: "Admin",     icon: iconWrench },
   ];
 
   return (
@@ -130,5 +131,12 @@ const iconAgent = (
     <circle cx="6" cy="7.5" r="1" fill="currentColor" />
     <circle cx="11" cy="7.5" r="1" fill="currentColor" />
     <path d="M6 11s.8 1.5 2.5 1.5S11 11 11 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+  </svg>
+);
+
+const iconWrench = (
+  <svg width="17" height="17" viewBox="0 0 17 17" fill="none">
+    <path d="M10.5 2.5a4 4 0 00-4 4c0 .4.06.8.16 1.16L2 12.5 4.5 15l4.84-4.66c.36.1.76.16 1.16.16a4 4 0 000-8z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+    <circle cx="10.5" cy="6.5" r="1" fill="currentColor" />
   </svg>
 );

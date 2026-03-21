@@ -23,6 +23,9 @@
   --purple: #6b52a8;
   --purple-soft: rgba(107, 82, 168, 0.12);
 
+  --surface-raised: rgba(255, 255, 255, 0.5);
+  --accent-tint: rgba(29, 107, 82, 0.10);
+
   /* Layout */
   --nav-w: 230px;
   --page-pad: 36px;
