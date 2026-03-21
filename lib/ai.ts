@@ -138,6 +138,19 @@ export function rankCandidates(
         }
       }
 
+      // Code quality (GitHub candidates only)
+      if (candidate.codeQuality) {
+        const cq = candidate.codeQuality;
+        if (cq.badge === "code-pass") {
+          score += 12;
+          matchedSignals.push(`Code Pass ★${cq.topStars > 0 ? cq.topStars : ""}`);
+        } else if (cq.badge === "poor-code") {
+          score -= 15;
+          risks.push(`Poor code quality: ${cq.reason}`);
+        }
+        // limited-signal: no adjustment
+      }
+
       // Location fit: +5 if matches, no penalty for unknown
       const geo = criteria.geoPreference.toLowerCase();
       const locTokens = tokenize(geo).filter((t) => t.length > 2 && !["remote", "only", "with", "preference"].includes(t));

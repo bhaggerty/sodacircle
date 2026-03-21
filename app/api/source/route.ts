@@ -65,6 +65,8 @@ export async function POST(req: NextRequest) {
           summary: r.summary,
           experience: r.experience,
           notes: r.notes,
+          sourceName: r.sourceName,
+          codeQuality: r.codeQuality,
         } satisfies Candidate))
       );
     } catch (err) {

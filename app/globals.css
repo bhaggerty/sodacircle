@@ -994,6 +994,38 @@ button, input, textarea, select { font: inherit; }
   align-items: center;
 }
 
+/* ─── Code quality badges ────────────────────────────────────────── */
+.code-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: var(--radius-pill);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  cursor: default;
+  white-space: nowrap;
+}
+
+.code-badge-pass {
+  background: rgba(29, 107, 82, 0.12);
+  color: #1d6b52;
+  border: 1px solid rgba(29, 107, 82, 0.25);
+}
+
+.code-badge-poor {
+  background: rgba(185, 92, 40, 0.1);
+  color: #b95c28;
+  border: 1px solid rgba(185, 92, 40, 0.25);
+}
+
+.code-badge-limited {
+  background: rgba(29, 31, 28, 0.05);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+
 /* ─── Agent brief / criteria inline editor ──────────────────────── */
 .agent-brief-box {
   background: var(--accent-soft);

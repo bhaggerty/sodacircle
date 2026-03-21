@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useStore } from "@/lib/store";
 import { Avatar, ScoreRing } from "@/components/score-ring";
 import { AtsSyncStatus } from "@/lib/ats";
-import { CandidateStatus } from "@/lib/types";
+import { CandidateStatus, CodeQuality } from "@/lib/types";
 
 const RECOMMENDATION_LABEL: Record<string, string> = {
   prioritize: "Prioritize",
@@ -22,6 +22,38 @@ const STATUS_CHIP: Record<CandidateStatus, { label: string; cls: string }> = {
   "wrong fit": { label: "Wrong fit", cls: "chip-warn" },
   "follow up later": { label: "Follow up later", cls: "chip-purple" },
 };
+
+function CodeQualityBadge({ cq }: { cq: CodeQuality }) {
+  if (cq.badge === "code-pass") {
+    return (
+      <span
+        className="code-badge code-badge-pass"
+        title={`${cq.reason}${cq.signals.length ? "\n✓ " + cq.signals.slice(0, 3).join("\n✓ ") : ""}`}
+      >
+        ✓ Code Pass{cq.topStars > 0 ? ` ★${cq.topStars}` : ""}
+      </span>
+    );
+  }
+  if (cq.badge === "poor-code") {
+    return (
+      <span
+        className="code-badge code-badge-poor"
+        title={`${cq.reason}${cq.concerns.length ? "\n⚠ " + cq.concerns.slice(0, 3).join("\n⚠ ") : ""}`}
+      >
+        ⚠ Poor Code Quality
+      </span>
+    );
+  }
+  // limited-signal — show quietly, don't clutter
+  return (
+    <span
+      className="code-badge code-badge-limited"
+      title={`Limited public code to evaluate. ${cq.reason}`}
+    >
+      ? Limited Signal
+    </span>
+  );
+}
 
 function AtsBadge({
   status,
@@ -189,7 +221,9 @@ export default function CandidatesPage() {
                 <span className={`chip ${recChip}`}>
                   {RECOMMENDATION_LABEL[c.recommendation]}
                 </span>
-                {c.matchedSignals.slice(0, 2).map((s) => (
+                {/* Code quality badge (GitHub candidates only) */}
+                {c.codeQuality && <CodeQualityBadge cq={c.codeQuality} />}
+                {c.matchedSignals.filter((s) => !s.startsWith("Code Pass")).slice(0, 2).map((s) => (
                   <span key={s} className="chip">{s}</span>
                 ))}
                 {/* ATS sync status */}

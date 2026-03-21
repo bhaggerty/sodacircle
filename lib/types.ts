@@ -19,6 +19,18 @@ export type SearchCriteria = {
   };
 };
 
+export type CodeQualityBadge = "code-pass" | "poor-code" | "limited-signal";
+
+export type CodeQuality = {
+  badge: CodeQualityBadge;
+  score: number;        // 0-100
+  reason: string;       // 1-sentence explanation
+  topStars: number;     // stars on their best original repo
+  ownRepoCount: number; // how many original (non-fork) repos
+  signals: string[];    // positive signals
+  concerns: string[];   // negative signals
+};
+
 export type Candidate = {
   id: string;
   name: string;
@@ -30,6 +42,8 @@ export type Candidate = {
   summary: string;
   experience: string;
   notes?: string;
+  sourceName?: "github" | "hn" | "web";
+  codeQuality?: CodeQuality;
 };
 
 export type CandidateScore = {
