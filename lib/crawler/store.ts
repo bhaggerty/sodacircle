@@ -1,22 +1,40 @@
 /**
- * Persistent profile store — JSONL-backed, append-only.
- * Fast to write, readable without full-file rewrites.
+ * Profile store — DynamoDB-backed (single table from APP_DYNAMODB_TABLE_NAME).
  *
- * Files (in data/ at project root):
- *   profiles.jsonl  — one profile per line
- *   state.json      — crawler state (stats, queue snapshot)
+ * Table key schema (standard Union Station single-table):
+ *   pk  (String) — partition key
+ *   sk  (String) — sort key
+ *
+ * Key patterns:
+ *   Profiles     pk="PROFILE"         sk="<id>"
+ *   CrawlerState pk="CRAWLER"         sk="STATE"
+ *   Visited URLs pk="VISITED"         sk="<url>"   (written in batches, TTL 30 days)
+ *
+ * Falls back to in-memory no-op when the table name is not configured,
+ * so local dev without AWS credentials doesn't crash.
  */
 
-import fs from "fs";
-import path from "path";
+import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import {
+  DynamoDBDocumentClient,
+  PutCommand,
+  GetCommand,
+  QueryCommand,
+  ScanCommand,
+  BatchWriteCommand,
+} from "@aws-sdk/lib-dynamodb";
 
-const DATA_DIR   = path.join(process.cwd(), "data");
-const PROFILES_F = path.join(DATA_DIR, "profiles.jsonl");
-const STATE_F    = path.join(DATA_DIR, "state.json");
+// ── Client ────────────────────────────────────────────────────────────────────
 
-function ensureDir() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-}
+const TABLE = process.env.APP_DYNAMODB_TABLE_NAME ?? "";
+
+// SDK auto-discovers credentials from the instance role injected by Union Station
+const raw = new DynamoDBClient({ region: process.env.AWS_REGION ?? "us-east-1" });
+const db  = DynamoDBDocumentClient.from(raw, {
+  marshallOptions: { removeUndefinedValues: true },
+});
+
+const hasTable = () => !!TABLE;
 
 // ── Profile shape ────────────────────────────────────────────────────────────
 
@@ -36,59 +54,101 @@ export interface IndexedProfile {
   indexedAt: string;
 }
 
+// ── In-memory dedup cache (per process) ──────────────────────────────────────
+
+const _seen = new Set<string>();
+
+function dedupeKey(p: IndexedProfile): string {
+  return `${p.name.toLowerCase().trim()}|${p.company.toLowerCase().trim()}`;
+}
+
 // ── Write ────────────────────────────────────────────────────────────────────
 
-const _seen = new Set<string>(); // in-memory dedup cache
-
-export function appendProfile(p: IndexedProfile): boolean {
-  const key = `${p.name.toLowerCase().trim()}|${p.company.toLowerCase().trim()}`;
+export async function appendProfile(p: IndexedProfile): Promise<boolean> {
+  const key    = dedupeKey(p);
   const altKey = p.githubUrl || p.linkedinUrl || p.email;
 
   if (_seen.has(key) || (altKey && _seen.has(altKey))) return false;
   _seen.add(key);
   if (altKey) _seen.add(altKey);
 
-  ensureDir();
-  fs.appendFileSync(PROFILES_F, JSON.stringify(p) + "\n", "utf8");
-  return true;
+  if (!hasTable()) return true; // local dev — accept but don't persist
+
+  try {
+    await db.send(new PutCommand({
+      TableName: TABLE,
+      Item: { pk: "PROFILE", sk: p.id, ...p },
+      ConditionExpression: "attribute_not_exists(sk)", // don't overwrite
+    }));
+    return true;
+  } catch (err: unknown) {
+    // ConditionalCheckFailedException = already exists — not a real error
+    if ((err as { name?: string }).name === "ConditionalCheckFailedException") return false;
+    console.error("[store] appendProfile error", err);
+    return false;
+  }
 }
 
 // ── Read ─────────────────────────────────────────────────────────────────────
 
-export function readProfiles(limit = 1000, offset = 0): IndexedProfile[] {
-  ensureDir();
-  if (!fs.existsSync(PROFILES_F)) return [];
+export async function readProfiles(limit = 1000, lastKey?: Record<string, unknown>): Promise<{
+  profiles: IndexedProfile[];
+  lastKey?: Record<string, unknown>;
+}> {
+  if (!hasTable()) return { profiles: [] };
 
-  const lines = fs.readFileSync(PROFILES_F, "utf8")
-    .split("\n")
-    .filter(Boolean);
+  try {
+    const res = await db.send(new QueryCommand({
+      TableName: TABLE,
+      KeyConditionExpression: "pk = :pk",
+      ExpressionAttributeValues: { ":pk": "PROFILE" },
+      Limit: limit,
+      ExclusiveStartKey: lastKey,
+    }));
 
-  return lines
-    .slice(offset, offset + limit)
-    .map((l) => { try { return JSON.parse(l) as IndexedProfile; } catch { return null; } })
-    .filter((p): p is IndexedProfile => p !== null);
+    return {
+      profiles: (res.Items ?? []) as IndexedProfile[],
+      lastKey: res.LastEvaluatedKey as Record<string, unknown> | undefined,
+    };
+  } catch (err) {
+    console.error("[store] readProfiles error", err);
+    return { profiles: [] };
+  }
 }
 
-export function countProfiles(): number {
-  if (!fs.existsSync(PROFILES_F)) return 0;
-  let count = 0;
-  const data = fs.readFileSync(PROFILES_F, "utf8");
-  for (const c of data) if (c === "\n") count++;
-  return count;
+export async function countProfiles(): Promise<number> {
+  if (!hasTable()) return 0;
+  try {
+    const res = await db.send(new QueryCommand({
+      TableName: TABLE,
+      KeyConditionExpression: "pk = :pk",
+      ExpressionAttributeValues: { ":pk": "PROFILE" },
+      Select: "COUNT",
+    }));
+    return res.Count ?? 0;
+  } catch {
+    return 0;
+  }
 }
 
-// Simple text search across name, title, company, bio, skills
-export function searchProfiles(query: string, limit = 50): IndexedProfile[] {
-  if (!query.trim()) return readProfiles(limit);
+export async function searchProfiles(query: string, limit = 50): Promise<IndexedProfile[]> {
+  if (!hasTable()) return [];
+  if (!query.trim()) {
+    const { profiles } = await readProfiles(limit);
+    return profiles;
+  }
 
   const terms = query.toLowerCase().split(/\s+/).filter((t) => t.length >= 2);
-  const all = readProfiles(10000); // read all for search
+
+  // DynamoDB doesn't support full-text search — pull all profiles and score in-process.
+  // For large tables a GSI + OpenSearch would be better; fine for <50k profiles.
+  const { profiles: all } = await readProfiles(10000);
 
   return all
     .map((p) => {
-      const haystack = [p.name, p.title, p.company, p.bio, p.location, ...p.skills]
+      const hay = [p.name, p.title, p.company, p.bio, p.location, ...p.skills]
         .join(" ").toLowerCase();
-      const score = terms.filter((t) => haystack.includes(t)).length;
+      const score = terms.filter((t) => hay.includes(t)).length;
       return { p, score };
     })
     .filter(({ score }) => score > 0)
@@ -97,7 +157,7 @@ export function searchProfiles(query: string, limit = 50): IndexedProfile[] {
     .map(({ p }) => p);
 }
 
-// ── State persistence ────────────────────────────────────────────────────────
+// ── Crawler state ────────────────────────────────────────────────────────────
 
 export interface CrawlerState {
   running: boolean;
@@ -111,34 +171,85 @@ export interface CrawlerState {
   lastActivity: string | null;
 }
 
-export function readState(): CrawlerState {
-  if (!fs.existsSync(STATE_F)) return {
-    running: false, startedAt: null, stoppedAt: null,
-    pagesVisited: 0, profilesFound: 0, errors: 0, queueDepth: 0,
-    recentFinds: [], lastActivity: null,
-  };
-  try { return JSON.parse(fs.readFileSync(STATE_F, "utf8")) as CrawlerState; }
-  catch { return { running: false, startedAt: null, stoppedAt: null, pagesVisited: 0, profilesFound: 0, errors: 0, queueDepth: 0, recentFinds: [], lastActivity: null }; }
+const _defaultState: CrawlerState = {
+  running: false, startedAt: null, stoppedAt: null,
+  pagesVisited: 0, profilesFound: 0, errors: 0,
+  queueDepth: 0, recentFinds: [], lastActivity: null,
+};
+
+export async function readState(): Promise<CrawlerState> {
+  if (!hasTable()) return { ..._defaultState };
+  try {
+    const res = await db.send(new GetCommand({
+      TableName: TABLE,
+      Key: { pk: "CRAWLER", sk: "STATE" },
+    }));
+    return res.Item ? (res.Item as CrawlerState) : { ..._defaultState };
+  } catch {
+    return { ..._defaultState };
+  }
 }
 
-export function writeState(state: Partial<CrawlerState>) {
-  ensureDir();
-  const current = readState();
-  fs.writeFileSync(STATE_F, JSON.stringify({ ...current, ...state }, null, 2), "utf8");
+export async function writeState(patch: Partial<CrawlerState>): Promise<void> {
+  if (!hasTable()) return;
+  const current = await readState();
+  try {
+    await db.send(new PutCommand({
+      TableName: TABLE,
+      Item: { pk: "CRAWLER", sk: "STATE", ...current, ...patch },
+    }));
+  } catch (err) {
+    console.error("[store] writeState error", err);
+  }
 }
 
-// ── Seed cache (persist visited URLs across restarts) ────────────────────────
-const VISITED_F = path.join(DATA_DIR, "visited.json");
+// ── Visited URL cache ─────────────────────────────────────────────────────────
+// Written in batches; each item has a 30-day TTL so the set self-prunes.
 
-export function loadVisited(): Set<string> {
-  if (!fs.existsSync(VISITED_F)) return new Set();
-  try { return new Set(JSON.parse(fs.readFileSync(VISITED_F, "utf8")) as string[]); }
-  catch { return new Set(); }
+const VISITED_TTL_DAYS = 30;
+
+export async function loadVisited(): Promise<Set<string>> {
+  if (!hasTable()) return new Set();
+  try {
+    const items: string[] = [];
+    let lastKey: Record<string, unknown> | undefined;
+    do {
+      const res = await db.send(new QueryCommand({
+        TableName: TABLE,
+        KeyConditionExpression: "pk = :pk",
+        ExpressionAttributeValues: { ":pk": "VISITED" },
+        ProjectionExpression: "sk",
+        ExclusiveStartKey: lastKey,
+      }));
+      for (const item of res.Items ?? []) items.push(item.sk as string);
+      lastKey = res.LastEvaluatedKey as Record<string, unknown> | undefined;
+    } while (lastKey);
+    return new Set(items);
+  } catch (err) {
+    console.error("[store] loadVisited error", err);
+    return new Set();
+  }
 }
 
-export function saveVisited(visited: Set<string>) {
-  ensureDir();
-  // Save a capped snapshot (last 50k) so the file doesn't grow forever
-  const arr = [...visited].slice(-50000);
-  fs.writeFileSync(VISITED_F, JSON.stringify(arr), "utf8");
+export async function saveVisited(visited: Set<string>, onlyNew: Set<string> = visited): Promise<void> {
+  if (!hasTable() || onlyNew.size === 0) return;
+
+  const ttl = Math.floor(Date.now() / 1000) + VISITED_TTL_DAYS * 86400;
+  const urls = [...onlyNew].slice(-2000); // cap batch size per save
+
+  // BatchWrite supports up to 25 items per call
+  for (let i = 0; i < urls.length; i += 25) {
+    const chunk = urls.slice(i, i + 25);
+    try {
+      await db.send(new BatchWriteCommand({
+        RequestItems: {
+          [TABLE]: chunk.map((url) => ({
+            PutRequest: { Item: { pk: "VISITED", sk: url, ttl } },
+          })),
+        },
+      }));
+    } catch (err) {
+      console.error("[store] saveVisited batch error", err);
+    }
+  }
 }

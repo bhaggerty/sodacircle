@@ -1,0 +1,98 @@
+{
+  "pages": {
+    "/_not-found/page": [
+      "static/chunks/webpack-6fefd7ad67fb8b61.js",
+      "static/chunks/4bd1b696-5b61bfbec30eb95d.js",
+      "static/chunks/684-70b558741c6b6d60.js",
+      "static/chunks/main-app-b6df639a2c334f4f.js",
+      "static/chunks/app/_not-found/page-3fcd92aa9cc4294f.js"
+    ],
+    "/layout": [
+      "static/chunks/webpack-6fefd7ad67fb8b61.js",
+      "static/chunks/4bd1b696-5b61bfbec30eb95d.js",
+      "static/chunks/684-70b558741c6b6d60.js",
+      "static/chunks/main-app-b6df639a2c334f4f.js",
+      "static/css/89f3b03143e2ad1f.css",
+      "static/chunks/874-b5005d13b26a55f3.js",
+      "static/chunks/894-8d8d312ea98a8ee8.js",
+      "static/chunks/app/layout-36601d0deca618d4.js"
+    ],
+    "/api/source/route": [
+      "static/chunks/webpack-6fefd7ad67fb8b61.js",
+      "static/chunks/4bd1b696-5b61bfbec30eb95d.js",
+      "static/chunks/684-70b558741c6b6d60.js",
+      "static/chunks/main-app-b6df639a2c334f4f.js",
+      "static/chunks/app/api/source/route-c005fce63bf71128.js"
+    ],
+    "/api/ats/push/route": [
+      "static/chunks/webpack-6fefd7ad67fb8b61.js",
+      "static/chunks/4bd1b696-5b61bfbec30eb95d.js",
+      "static/chunks/684-70b558741c6b6d60.js",
+      "static/chunks/main-app-b6df639a2c334f4f.js",
+      "static/chunks/app/api/ats/push/route-9154bc120d14e3d1.js"
+    ],
+    "/health/route": [
+      "static/chunks/webpack-6fefd7ad67fb8b61.js",
+      "static/chunks/4bd1b696-5b61bfbec30eb95d.js",
+      "static/chunks/684-70b558741c6b6d60.js",
+      "static/chunks/main-app-b6df639a2c334f4f.js",
+      "static/chunks/app/health/route-ee47410fcc0fc650.js"
+    ],
+    "/api/ats/test/route": [
+      "static/chunks/webpack-6fefd7ad67fb8b61.js",
+      "static/chunks/4bd1b696-5b61bfbec30eb95d.js",
+      "static/chunks/684-70b558741c6b6d60.js",
+      "static/chunks/main-app-b6df639a2c334f4f.js",
+      "static/chunks/app/api/ats/test/route-632052e85b63e917.js"
+    ],
+    "/candidates/page": [
+      "static/chunks/webpack-6fefd7ad67fb8b61.js",
+      "static/chunks/4bd1b696-5b61bfbec30eb95d.js",
+      "static/chunks/684-70b558741c6b6d60.js",
+      "static/chunks/main-app-b6df639a2c334f4f.js",
+      "static/chunks/894-8d8d312ea98a8ee8.js",
+      "static/chunks/app/candidates/page-133b411e1460e68b.js"
+    ],
+    "/agents/page": [
+      "static/chunks/webpack-6fefd7ad67fb8b61.js",
+      "static/chunks/4bd1b696-5b61bfbec30eb95d.js",
+      "static/chunks/684-70b558741c6b6d60.js",
+      "static/chunks/main-app-b6df639a2c334f4f.js",
+      "static/chunks/894-8d8d312ea98a8ee8.js",
+      "static/chunks/app/agents/page-10b281e8ad2c0b27.js"
+    ],
+    "/search/page": [
+      "static/chunks/webpack-6fefd7ad67fb8b61.js",
+      "static/chunks/4bd1b696-5b61bfbec30eb95d.js",
+      "static/chunks/684-70b558741c6b6d60.js",
+      "static/chunks/main-app-b6df639a2c334f4f.js",
+      "static/chunks/894-8d8d312ea98a8ee8.js",
+      "static/chunks/app/search/page-12ea82923d8c327a.js"
+    ],
+    "/replies/page": [
+      "static/chunks/webpack-6fefd7ad67fb8b61.js",
+      "static/chunks/4bd1b696-5b61bfbec30eb95d.js",
+      "static/chunks/684-70b558741c6b6d60.js",
+      "static/chunks/main-app-b6df639a2c334f4f.js",
+      "static/chunks/894-8d8d312ea98a8ee8.js",
+      "static/chunks/app/replies/page-67335de003d587ee.js"
+    ],
+    "/page": [
+      "static/chunks/webpack-6fefd7ad67fb8b61.js",
+      "static/chunks/4bd1b696-5b61bfbec30eb95d.js",
+      "static/chunks/684-70b558741c6b6d60.js",
+      "static/chunks/main-app-b6df639a2c334f4f.js",
+      "static/chunks/874-b5005d13b26a55f3.js",
+      "static/chunks/894-8d8d312ea98a8ee8.js",
+      "static/chunks/app/page-e9284569ffbd8261.js"
+    ],
+    "/outreach/page": [
+      "static/chunks/webpack-6fefd7ad67fb8b61.js",
+      "static/chunks/4bd1b696-5b61bfbec30eb95d.js",
+      "static/chunks/684-70b558741c6b6d60.js",
+      "static/chunks/main-app-b6df639a2c334f4f.js",
+      "static/chunks/894-8d8d312ea98a8ee8.js",
+      "static/chunks/app/outreach/page-d9e90e97afaadacf.js"
+    ]
+  }
+}

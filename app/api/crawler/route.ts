@@ -1,26 +1,24 @@
 /**
  * GET  /api/crawler        — status
- * POST /api/crawler        — start / stop / add-urls
- *   body: { action: "start" | "stop" | "add-urls", urls?: string[] }
+ * POST /api/crawler        — { action: "start" | "stop" | "add-urls", urls?: string[] }
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import {
   startCrawler,
   stopCrawler,
-  isCrawlerRunning,
   getCrawlerStatus,
   addSeedUrls,
 } from "@/lib/crawler/index";
 import { readState, countProfiles } from "@/lib/crawler/store";
 
 export async function GET() {
-  const state  = readState();
+  const [state, total] = await Promise.all([readState(), countProfiles()]);
   const status = getCrawlerStatus();
   return NextResponse.json({
     ...state,
     queueDepth: status.queueDepth,
-    totalIndexed: countProfiles(),
+    totalIndexed: total,
     recentFinds: status.recentFinds,
   });
 }

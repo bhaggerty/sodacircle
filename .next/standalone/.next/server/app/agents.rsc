@@ -1,0 +1,19 @@
+1:"$Sreact.fragment"
+2:I[9513,["874","static/chunks/874-b5005d13b26a55f3.js","894","static/chunks/894-8d8d312ea98a8ee8.js","177","static/chunks/app/layout-36601d0deca618d4.js"],"AppProvider"]
+3:I[210,["874","static/chunks/874-b5005d13b26a55f3.js","894","static/chunks/894-8d8d312ea98a8ee8.js","177","static/chunks/app/layout-36601d0deca618d4.js"],"Nav"]
+4:I[7555,[],""]
+5:I[1295,[],""]
+6:I[894,[],"ClientPageRoot"]
+7:I[5848,["894","static/chunks/894-8d8d312ea98a8ee8.js","165","static/chunks/app/agents/page-10b281e8ad2c0b27.js"],"default"]
+a:I[9665,[],"OutletBoundary"]
+d:I[9665,[],"ViewportBoundary"]
+f:I[9665,[],"MetadataBoundary"]
+11:I[6614,[],""]
+:HL["/_next/static/css/89f3b03143e2ad1f.css","style"]
+0:{"P":null,"b":"lBA2HAE4gt7Bl3V6f_ehO","p":"","c":["","agents"],"i":false,"f":[[["",{"children":["agents",{"children":["__PAGE__",{}]}]},"$undefined","$undefined",true],["",["$","$1","c",{"children":[[["$","link","0",{"rel":"stylesheet","href":"/_next/static/css/89f3b03143e2ad1f.css","precedence":"next","crossOrigin":"$undefined","nonce":"$undefined"}]],["$","html",null,{"lang":"en","children":["$","body",null,{"className":"__variable_1bc20f __variable_6b9622","children":["$","$L2",null,{"children":["$","div",null,{"className":"app-shell","children":[["$","$L3",null,{}],["$","div",null,{"className":"main-content","children":["$","$L4",null,{"parallelRouterKey":"children","error":"$undefined","errorStyles":"$undefined","errorScripts":"$undefined","template":["$","$L5",null,{}],"templateStyles":"$undefined","templateScripts":"$undefined","notFound":[[["$","title",null,{"children":"404: This page could not be found."}],["$","div",null,{"style":{"fontFamily":"system-ui,\"Segoe UI\",Roboto,Helvetica,Arial,sans-serif,\"Apple Color Emoji\",\"Segoe UI Emoji\"","height":"100vh","textAlign":"center","display":"flex","flexDirection":"column","alignItems":"center","justifyContent":"center"},"children":["$","div",null,{"children":[["$","style",null,{"dangerouslySetInnerHTML":{"__html":"body{color:#000;background:#fff;margin:0}.next-error-h1{border-right:1px solid rgba(0,0,0,.3)}@media (prefers-color-scheme:dark){body{color:#fff;background:#000}.next-error-h1{border-right:1px solid rgba(255,255,255,.3)}}"}}],["$","h1",null,{"className":"next-error-h1","style":{"display":"inline-block","margin":"0 20px 0 0","padding":"0 23px 0 0","fontSize":24,"fontWeight":500,"verticalAlign":"top","lineHeight":"49px"},"children":404}],["$","div",null,{"style":{"display":"inline-block"},"children":["$","h2",null,{"style":{"fontSize":14,"fontWeight":400,"lineHeight":"49px","margin":0},"children":"This page could not be found."}]}]]}]}]],[]],"forbidden":"$undefined","unauthorized":"$undefined"}]}]]}]}]}]}]]}],{"children":["agents",["$","$1","c",{"children":[null,["$","$L4",null,{"parallelRouterKey":"children","error":"$undefined","errorStyles":"$undefined","errorScripts":"$undefined","template":["$","$L5",null,{}],"templateStyles":"$undefined","templateScripts":"$undefined","notFound":"$undefined","forbidden":"$undefined","unauthorized":"$undefined"}]]}],{"children":["__PAGE__",["$","$1","c",{"children":[["$","$L6",null,{"Component":"$7","searchParams":{},"params":{},"promises":["$@8","$@9"]}],"$undefined",null,["$","$La",null,{"children":["$Lb","$Lc",null]}]]}],{},null,false]},null,false]},null,false],["$","$1","h",{"children":[null,["$","$1","yBw2DExJpP2ZgG1KSKKwH",{"children":[["$","$Ld",null,{"children":"$Le"}],null]}],["$","$Lf",null,{"children":"$L10"}]]}],false]],"m":"$undefined","G":["$11","$undefined"],"s":false,"S":true}
+8:{}
+9:{}
+e:[["$","meta","0",{"charSet":"utf-8"}],["$","meta","1",{"name":"viewport","content":"width=device-width, initial-scale=1"}]]
+b:null
+c:null
+10:[["$","title","0",{"children":"sodacircle"}],["$","meta","1",{"name":"description","content":"sodacircle helps teams turn hiring briefs into ranked talent pipelines and personalized outreach."}]]

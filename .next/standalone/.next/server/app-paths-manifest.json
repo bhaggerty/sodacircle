@@ -1,0 +1,13 @@
+{
+  "/_not-found/page": "app/_not-found/page.js",
+  "/api/source/route": "app/api/source/route.js",
+  "/api/ats/push/route": "app/api/ats/push/route.js",
+  "/health/route": "app/health/route.js",
+  "/api/ats/test/route": "app/api/ats/test/route.js",
+  "/candidates/page": "app/candidates/page.js",
+  "/agents/page": "app/agents/page.js",
+  "/search/page": "app/search/page.js",
+  "/replies/page": "app/replies/page.js",
+  "/page": "app/page.js",
+  "/outreach/page": "app/outreach/page.js"
+}

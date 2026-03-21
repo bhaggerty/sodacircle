@@ -296,7 +296,7 @@ async function processGitHubUsers(stubs: GHUserStub[]): Promise<number> {
       indexedAt: new Date().toISOString(),
     };
 
-    if (appendProfile(profile)) {
+    if (await appendProfile(profile)) {
       saved++;
       _stats.profiles++;
       recordFind(profile);
@@ -366,14 +366,14 @@ async function crawlWebPage(url: string): Promise<number> {
   }
 
   _stats.pages++;
-  const saved = extractPeopleFromHtml(html, url);
+  const saved = await extractPeopleFromHtml(html, url);
   discoverLinks(html, parsed.origin, disallowed);
   return saved;
 }
 
 // ── Cheerio-based people extraction ──────────────────────────────────────────
 
-function extractPeopleFromHtml(html: string, sourceUrl: string): number {
+async function extractPeopleFromHtml(html: string, sourceUrl: string): Promise<number> {
   const $ = cheerio.load(html);
   let saved = 0;
 
@@ -393,6 +393,7 @@ function extractPeopleFromHtml(html: string, sourceUrl: string): number {
     const cards = $(sel).toArray();
     if (cards.length < 2 || cards.length > 200) continue; // skip if too few or clearly not people
 
+    const candidates: IndexedProfile[] = [];
     for (const card of cards) {
       const el = $(card);
       // Name: look for heading or strong text
@@ -414,7 +415,7 @@ function extractPeopleFromHtml(html: string, sourceUrl: string): number {
       const liLink    = el.find("a[href*='linkedin.com/in']").attr("href") ?? "";
       const emailLink = el.find("a[href^='mailto:']").attr("href")?.replace("mailto:", "") ?? "";
 
-      const profile: IndexedProfile = {
+      candidates.push({
         id: `web-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         name,
         title,
@@ -428,9 +429,12 @@ function extractPeopleFromHtml(html: string, sourceUrl: string): number {
         sourceUrl,
         sourceName: "web",
         indexedAt: new Date().toISOString(),
-      };
+      });
+    }
 
-      if (appendProfile(profile)) { saved++; _stats.profiles++; recordFind(profile); }
+    // Write collected profiles (async, outside cheerio callback)
+    for (const profile of candidates) {
+      if (await appendProfile(profile)) { saved++; _stats.profiles++; recordFind(profile); }
     }
 
     if (saved > 0) return saved; // found profiles with this selector, don't double-count
@@ -526,24 +530,27 @@ async function processGitHubProfileUrl(url: string): Promise<number> {
   };
 
   _stats.pages++;
-  if (appendProfile(profile)) { _stats.profiles++; recordFind(profile); return 1; }
+  if (await appendProfile(profile)) { _stats.profiles++; recordFind(profile); return 1; }
   return 0;
 }
 
 // ── Main loop ────────────────────────────────────────────────────────────────
 
 async function crawlLoop() {
-  _visited = loadVisited();
+  _visited = await loadVisited();
 
   for (const seed of WEB_SEEDS) enqueue(seed, 9);
 
-  const saved = readState();
+  const saved = await readState();
   _stats.pages    = saved.pagesVisited;
   _stats.profiles = saved.profilesFound;
   _stats.errors   = saved.errors;
   _recentFinds    = saved.recentFinds ?? [];
 
-  writeState({
+  // Track newly-visited URLs this session so we only write new ones to DynamoDB
+  const _newVisited = new Set<string>();
+
+  await writeState({
     running: true, startedAt: new Date().toISOString(), stoppedAt: null,
     pagesVisited: _stats.pages, profilesFound: _stats.profiles, errors: _stats.errors,
     queueDepth: _queue.length, recentFinds: _recentFinds, lastActivity: new Date().toISOString(),
@@ -553,7 +560,6 @@ async function crawlLoop() {
     _iteration++;
 
     try {
-      // Cycle: 2× GitHub search, 1× org members, 1× web page
       const phase = _iteration % 4;
 
       if (phase === 0) {
@@ -561,7 +567,6 @@ async function crawlLoop() {
       } else if (phase === 1 || phase === 3) {
         await crawlGitHubSearch();
       } else {
-        // Web or GitHub profile URL from queue
         const item = _queue.shift();
         if (!item) {
           for (const seed of WEB_SEEDS) enqueue(seed, 9);
@@ -569,6 +574,7 @@ async function crawlLoop() {
           continue;
         }
         _visited.add(item.url);
+        _newVisited.add(item.url);
         if (item.url.startsWith("https://github.com/")) {
           await processGitHubProfileUrl(item.url);
         } else {
@@ -581,8 +587,9 @@ async function crawlLoop() {
     }
 
     if (_iteration % SAVE_EVERY === 0) {
-      saveVisited(_visited);
-      writeState({
+      await saveVisited(_visited, _newVisited);
+      _newVisited.clear();
+      await writeState({
         pagesVisited: _stats.pages, profilesFound: _stats.profiles,
         errors: _stats.errors, queueDepth: _queue.length,
         recentFinds: _recentFinds, lastActivity: new Date().toISOString(),
@@ -592,8 +599,8 @@ async function crawlLoop() {
     await sleep(200);
   }
 
-  saveVisited(_visited);
-  writeState({
+  await saveVisited(_visited, _newVisited);
+  await writeState({
     running: false, stoppedAt: new Date().toISOString(),
     pagesVisited: _stats.pages, profilesFound: _stats.profiles,
     errors: _stats.errors, queueDepth: _queue.length,
