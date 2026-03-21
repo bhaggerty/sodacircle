@@ -20,9 +20,9 @@ import {
   PutCommand,
   GetCommand,
   QueryCommand,
-  ScanCommand,
   BatchWriteCommand,
 } from "@aws-sdk/lib-dynamodb";
+import { normalizeProfile } from "@/lib/profiles/normalizeProfile";
 
 // ── Client ────────────────────────────────────────────────────────────────────
 
@@ -74,15 +74,17 @@ export async function appendProfile(p: IndexedProfile): Promise<boolean> {
 
   if (!hasTable()) return true; // local dev — accept but don't persist
 
+  // Enrich profile with domain tags, skill tags, confidence score before persisting
+  const enriched = normalizeProfile(p);
+
   try {
     await db.send(new PutCommand({
       TableName: TABLE,
-      Item: { pk: "PROFILE", sk: p.id, ...p },
+      Item: { pk: "PROFILE", sk: enriched.id, ...enriched },
       ConditionExpression: "attribute_not_exists(sk)", // don't overwrite
     }));
     return true;
   } catch (err: unknown) {
-    // ConditionalCheckFailedException = already exists — not a real error
     if ((err as { name?: string }).name === "ConditionalCheckFailedException") return false;
     console.error("[store] appendProfile error", err);
     return false;
