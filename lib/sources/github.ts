@@ -166,15 +166,15 @@ const NON_US_MARKERS = [
 
 function isLocationMatch(candidateLocation: string, targetRegion: string): boolean {
   if (!targetRegion) return true;
-  if (!candidateLocation) return true; // No info — don't filter out
+  if (!candidateLocation) return true; // No location set → keep
 
   const cloc = candidateLocation.toLowerCase();
   const target = targetRegion.toLowerCase();
 
-  const isUsSearch = /united states|new york|san francisco|seattle|austin|boston|chicago|denver/.test(target);
-  if (isUsSearch) {
-    // Explicitly exclude known non-US locations
-    return !NON_US_MARKERS.some((m) => cloc.includes(m));
+  // Always exclude explicitly non-US profiles when searching US
+  const isUsSearch = /united states|new york|san francisco|seattle|austin|boston|chicago|denver|los angeles|atlanta/.test(target);
+  if (isUsSearch && NON_US_MARKERS.some((m) => cloc.includes(m))) {
+    return false;
   }
 
   return true;

@@ -166,26 +166,29 @@ function isLocationMatch(candidate: SourcedCandidate, geoPreference: string): bo
   if (!geoPreference) return true;
 
   const geo = geoPreference.toLowerCase();
-  const cloc = (candidate.location + " " + candidate.summary).toLowerCase();
 
-  const isUsSearch = /\b(united states|usa|u\.s\.|new york|san francisco|seattle|us only|remote us|west coast|east coast)\b/.test(geo)
-    || /remote\s*\(?\s*(us|usa)\s*\)?/.test(geo);
+  const isUsSearch =
+    /\b(united states|usa|u\.s\.|new york|san francisco|seattle|austin|boston|chicago|denver|atlanta|los angeles)\b/.test(geo) ||
+    /remote\s*\(?\s*(us|usa)\s*\)?/.test(geo) ||
+    /\b(west coast|east coast|midwest|us only)\b/.test(geo);
 
   if (!isUsSearch) return true;
 
-  // If candidate location is empty/unknown → keep them
-  if (!candidate.location) return true;
+  // Only check the location field — never the summary.
+  // If a London developer mentions "San Francisco" in their bio they should NOT pass.
+  const loc = candidate.location.toLowerCase().trim();
 
-  // Explicit "worldwide" or no location context → keep
-  if (/worldwide|anywhere|nomad/i.test(cloc)) return true;
+  // No location set → keep (benefit of the doubt)
+  if (!loc) return true;
 
-  // If candidate mentions US/remote → keep
-  if (US_MARKERS.some((m) => cloc.includes(m))) return true;
+  // Clearly non-US → exclude
+  if (NON_US_MARKERS.some((m) => loc.includes(m))) return false;
 
-  // If candidate is clearly non-US → exclude
-  if (NON_US_MARKERS.some((m) => cloc.includes(m))) return false;
+  // Clearly US or remote-friendly → include
+  if (US_MARKERS.some((m) => loc.includes(m))) return true;
+  if (/worldwide|anywhere|nomad/i.test(loc)) return true;
 
-  // Unknown location → keep (benefit of the doubt)
+  // Unrecognized location string → keep
   return true;
 }
 
