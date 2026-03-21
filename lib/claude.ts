@@ -198,4 +198,44 @@ Example output for "senior golang backend engineer": ["golang", "go", "backend",
   }
 }
 
+// ── Search intent parsing ─────────────────────────────────────────
+
+/**
+ * Turn a short natural-language recruiter query ("founding AE sold identity security")
+ * into a structured SearchCriteria that can be fed to rankCandidates().
+ */
+export async function parseSearchIntent(query: string): Promise<Partial<SearchCriteria>> {
+  if (!hasKey()) {
+    // Minimal regex fallback
+    return { roleTitle: query, mustHaves: [query] };
+  }
+
+  const prompt = `A recruiter typed this search query: "${query}"
+
+Extract their intent as a structured hiring criteria object. Return ONLY valid JSON:
+{
+  "roleTitle": "inferred role title",
+  "mustHaves": ["specific skills, experiences, or credentials they clearly need"],
+  "niceToHaves": ["things they'd probably want but didn't explicitly state"],
+  "targetCompanies": ["specific companies mentioned or strongly implied"],
+  "geoPreference": "location if mentioned",
+  "searchRecipe": {
+    "industry": ["industry or domain"],
+    "seniority": "seniority level if implied",
+    "evidenceSignals": ["things that would prove fit — e.g. 'closed 7-figure deals', 'worked at Series B startup'"]
+  }
+}
+
+Be specific. If they say "AE who sold identity security" → mustHaves: ["identity security sales", "account executive"].
+If they mention a company name, add it to targetCompanies.
+Return only the JSON, no commentary.`;
+
+  try {
+    const raw = await claudeChat("claude-haiku-4-5-20251001", "", prompt, 512);
+    return parseJson<Partial<SearchCriteria>>(raw);
+  } catch {
+    return { roleTitle: query, mustHaves: [query] };
+  }
+}
+
 export { hasKey as claudeEnabled };

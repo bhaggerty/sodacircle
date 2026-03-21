@@ -1,10 +1,47 @@
 "use client";
 
-import { ChangeEvent, createContext, ReactNode, useCallback, useContext, useMemo, useState } from "react";
-import { draftOutreach, parseBriefToCriteria, rankCandidates } from "@/lib/ai";
+import { ChangeEvent, createContext, ReactNode, useCallback, useContext, useMemo, useState, useEffect } from "react";
+import { draftOutreachSequence, parseBriefToCriteria, rankCandidates } from "@/lib/ai";
 import { defaultBrief, defaultCriteria, sampleCandidates, sampleReplies } from "@/lib/mock-data";
-import { Candidate, CandidateStatus, RankedCandidate, ReplyClass, ReplyItem, SearchCriteria } from "@/lib/types";
+import { Candidate, CandidateStatus, OutreachStep, RankedCandidate, RankingCriterion, ReplyClass, ReplyItem, SavedSearch, SearchCriteria } from "@/lib/types";
 import { AtsSyncStatus, pushCandidateToAts } from "@/lib/ats";
+
+// ── localStorage helpers ─────────────────────────────────────────────────────
+
+// Bump this when the data shape changes — wipes all sc_* keys on first load
+const LS_VERSION = "2";
+
+function lsClearIfStale() {
+  if (typeof window === "undefined") return;
+  try {
+    if (localStorage.getItem("sc_version") !== LS_VERSION) {
+      Object.keys(localStorage)
+        .filter((k) => k.startsWith("sc_"))
+        .forEach((k) => localStorage.removeItem(k));
+      localStorage.setItem("sc_version", LS_VERSION);
+    }
+  } catch { /* ignore */ }
+}
+
+// Run once at module load time (client-only)
+if (typeof window !== "undefined") lsClearIfStale();
+
+function lsGet<T>(key: string, fallback: T): T {
+  if (typeof window === "undefined") return fallback;
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function lsSet(key: string, value: unknown) {
+  if (typeof window === "undefined") return;
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* quota exceeded, ignore */ }
+}
+
+// ── CSV parser ───────────────────────────────────────────────────────────────
 
 function parseCsv(text: string): Candidate[] {
   const [headerLine, ...rows] = text.trim().split(/\r?\n/);
@@ -34,6 +71,8 @@ function splitTags(value: string) {
   return value.split(",").map((item) => item.trim()).filter(Boolean);
 }
 
+// ── Context type ─────────────────────────────────────────────────────────────
+
 type StoreCtx = {
   brief: string;
   setBrief: (v: string) => void;
@@ -49,7 +88,14 @@ type StoreCtx = {
   setReplyStatus: (id: string, status: ReplyClass) => void;
   approvedCount: number;
   selectedCandidate: RankedCandidate | undefined;
-  outreachDraft: { subject: string; body: string } | null;
+  outreachSequence: OutreachStep[] | null;
+  activeStepIndex: number;
+  setActiveStep: (index: number) => void;
+  rankingCriteria: RankingCriterion[];
+  addRankingCriterion: (text: string, weight?: RankingCriterion["weight"]) => void;
+  removeRankingCriterion: (id: string) => void;
+  updateRankingCriterion: (id: string, patch: Partial<Omit<RankingCriterion, "id">>) => void;
+  prefillBriefFromCandidate: (c: RankedCandidate) => void;
   handleExtractCriteria: () => Promise<void>;
   handleCsvUpload: (e: ChangeEvent<HTMLInputElement>) => Promise<void>;
   handleTagChange: (field: keyof SearchCriteria, value: string) => void;
@@ -57,58 +103,158 @@ type StoreCtx = {
   replies: ReplyItem[];
   // ATS sync
   atsSyncStatus: Record<string, AtsSyncStatus>;
+  atsErrors: Record<string, string>;
   atsUrls: Record<string, string>;
   syncCandidateToAts: (candidateId: string) => Promise<void>;
   syncAllToAts: () => Promise<void>;
+  // Pool management
+  clearCandidates: () => void;
+  // Saved searches
+  savedSearches: SavedSearch[];
+  saveCurrentSearch: (name: string) => void;
+  loadSavedSearch: (id: string) => void;
+  deleteSavedSearch: (id: string) => void;
 };
 
 const Store = createContext<StoreCtx | null>(null);
 
 export function AppProvider({ children }: { children: ReactNode }) {
-  const [brief, setBrief] = useState(defaultBrief);
-  const [criteria, setCriteria] = useState<SearchCriteria>(defaultCriteria);
-  const [candidates, setCandidates] = useState<Candidate[]>(sampleCandidates);
+  const [brief, setBriefRaw] = useState<string>(() => lsGet("sc_brief", defaultBrief));
+  const [criteria, setCriteriaRaw] = useState<SearchCriteria>(() => lsGet("sc_criteria", defaultCriteria));
+  const [candidates, setCandidatesRaw] = useState<Candidate[]>(() => lsGet("sc_candidates", sampleCandidates));
   const [shortlist, setShortlist] = useState<RankedCandidate[]>(() =>
-    rankCandidates(sampleCandidates, defaultCriteria)
+    rankCandidates(lsGet<Candidate[]>("sc_candidates", sampleCandidates), lsGet("sc_criteria", defaultCriteria))
   );
-  const [selectedCandidateId, setSelectedCandidateId] = useState<string>(() => shortlist[0]?.id ?? "");
-  const [statuses, setStatuses] = useState<Record<string, CandidateStatus>>({});
+  const [selectedCandidateId, setSelectedCandidateId] = useState<string>("");
+  const [statuses, setStatusesRaw] = useState<Record<string, CandidateStatus>>(() => lsGet("sc_statuses", {}));
   const [replyStatuses, setReplyStatuses] = useState<Record<string, ReplyClass>>(
     Object.fromEntries(sampleReplies.map((r) => [r.candidateId, r.classification]))
   );
   const [atsSyncStatus, setAtsSyncStatus] = useState<Record<string, AtsSyncStatus>>({});
+  const [atsErrors, setAtsErrors] = useState<Record<string, string>>({});
   const [atsUrls, setAtsUrls] = useState<Record<string, string>>({});
+  const [rankingCriteria, setRankingCriteria] = useState<RankingCriterion[]>([]);
+  const [activeStepIndex, setActiveStep] = useState(0);
+  const [savedSearches, setSavedSearchesRaw] = useState<SavedSearch[]>(() => lsGet("sc_saved_searches", []));
 
+  // ── Persist to localStorage on change ────────────────────────────
+  const setBrief = useCallback((v: string) => { setBriefRaw(v); lsSet("sc_brief", v); }, []);
+  const setCriteria = useCallback((v: SearchCriteria) => { setCriteriaRaw(v); lsSet("sc_criteria", v); }, []);
+  const setSavedSearches = useCallback((updater: SavedSearch[] | ((prev: SavedSearch[]) => SavedSearch[])) => {
+    setSavedSearchesRaw((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      lsSet("sc_saved_searches", next);
+      return next;
+    });
+  }, []);
+
+  const setCandidates = useCallback((updater: ((prev: Candidate[]) => Candidate[]) | Candidate[]) => {
+    setCandidatesRaw((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      lsSet("sc_candidates", next);
+      return next;
+    });
+  }, []);
+
+  const setStatuses = useCallback((updater: ((prev: Record<string, CandidateStatus>) => Record<string, CandidateStatus>) | Record<string, CandidateStatus>) => {
+    setStatusesRaw((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      lsSet("sc_statuses", next);
+      return next;
+    });
+  }, []);
+
+  // ── Derived state ────────────────────────────────────────────────
   const approvedCount = useMemo(
     () => Object.values(statuses).filter((s) => s === "approved").length,
     [statuses]
   );
 
   const selectedCandidate = shortlist.find((c) => c.id === selectedCandidateId) ?? shortlist[0];
-  const outreachDraft = selectedCandidate ? draftOutreach(selectedCandidate, criteria) : null;
+  const outreachSequence = selectedCandidate ? draftOutreachSequence(selectedCandidate, criteria) : null;
 
-  const refreshRanking = (nextCriteria: SearchCriteria, nextCandidates = candidates) => {
-    const ranked = rankCandidates(nextCandidates, nextCriteria);
+  const refreshRanking = (nextCriteria: SearchCriteria, nextCandidates = candidates, nextRankingCriteria = rankingCriteria) => {
+    const ranked = rankCandidates(nextCandidates, nextCriteria, nextRankingCriteria);
     setShortlist(ranked);
-    setSelectedCandidateId(ranked[0]?.id ?? "");
   };
 
-  // ── ATS sync ────────────────────────────────────────────────────
+  // ── Ranking criteria ─────────────────────────────────────────────
+  const addRankingCriterion = useCallback((text: string, weight: RankingCriterion["weight"] = "normal") => {
+    const criterion: RankingCriterion = { id: `rc-${Date.now()}`, text, weight };
+    setRankingCriteria((prev) => {
+      const next = [...prev, criterion];
+      setShortlist(rankCandidates(candidates, criteria, next));
+      return next;
+    });
+  }, [candidates, criteria]);
 
+  const removeRankingCriterion = useCallback((id: string) => {
+    setRankingCriteria((prev) => {
+      const next = prev.filter((rc) => rc.id !== id);
+      setShortlist(rankCandidates(candidates, criteria, next));
+      return next;
+    });
+  }, [candidates, criteria]);
+
+  const updateRankingCriterion = useCallback((id: string, patch: Partial<Omit<RankingCriterion, "id">>) => {
+    setRankingCriteria((prev) => {
+      const next = prev.map((rc) => rc.id === id ? { ...rc, ...patch } : rc);
+      setShortlist(rankCandidates(candidates, criteria, next));
+      return next;
+    });
+  }, [candidates, criteria]);
+
+  const prefillBriefFromCandidate = useCallback((c: RankedCandidate) => {
+    const signals = c.matchedSignals
+      .filter((s) => !s.startsWith("Code Pass") && !s.startsWith("From a target"))
+      .slice(0, 3);
+    const newBrief = [
+      `Looking for someone like ${c.name} — ${c.title} at ${c.company}.`,
+      signals.length ? `Key strengths: ${signals.join(", ")}.` : "",
+      c.location ? `Location: ${c.location}.` : "",
+    ].filter(Boolean).join(" ");
+    setBrief(newBrief);
+  }, [setBrief]);
+
+  // ── Saved searches ────────────────────────────────────────────────
+  const saveCurrentSearch = useCallback((name: string) => {
+    const search: SavedSearch = {
+      id: `ss-${Date.now()}`,
+      name: name.trim(),
+      brief,
+      criteria,
+      savedAt: new Date().toISOString(),
+    };
+    setSavedSearches((prev) => [search, ...prev]);
+  }, [brief, criteria, setSavedSearches]);
+
+  const loadSavedSearch = useCallback((id: string) => {
+    const search = savedSearches.find((s) => s.id === id);
+    if (!search) return;
+    setBrief(search.brief);
+    setCriteria(search.criteria);
+    refreshRanking(search.criteria, candidates);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savedSearches, candidates, setBrief, setCriteria]);
+
+  const deleteSavedSearch = useCallback((id: string) => {
+    setSavedSearches((prev) => prev.filter((s) => s.id !== id));
+  }, [setSavedSearches]);
+
+  // ── ATS sync ─────────────────────────────────────────────────────
   const syncCandidateToAts = useCallback(async (candidateId: string) => {
-    // Skip if already synced or in-progress
     setAtsSyncStatus((s) => {
       if (s[candidateId] === "syncing" || s[candidateId] === "synced") return s;
       return { ...s, [candidateId]: "syncing" };
     });
 
-    // Find the candidate across shortlist and raw candidates
     const candidate =
       shortlist.find((c) => c.id === candidateId) ??
       candidates.find((c) => c.id === candidateId);
 
     if (!candidate) {
       setAtsSyncStatus((s) => ({ ...s, [candidateId]: "error" }));
+      setAtsErrors((e) => ({ ...e, [candidateId]: "Candidate not found" }));
       return;
     }
 
@@ -124,14 +270,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (result.ok) {
       setAtsSyncStatus((s) => ({ ...s, [candidateId]: "synced" }));
       if (result.atsUrl) setAtsUrls((u) => ({ ...u, [candidateId]: result.atsUrl }));
+      setAtsErrors((e) => { const next = { ...e }; delete next[candidateId]; return next; });
     } else {
       setAtsSyncStatus((s) => ({ ...s, [candidateId]: "error" }));
+      setAtsErrors((e) => ({ ...e, [candidateId]: result.error }));
       console.warn(`[ats] Failed to sync ${candidate.name}:`, result.error);
     }
   }, [shortlist, candidates]);
 
   const syncAllToAts = useCallback(async () => {
-    // Push every candidate not yet synced or errored, sequentially to avoid overwhelming the ATS
     for (const c of candidates) {
       const current = atsSyncStatus[c.id];
       if (current === "synced" || current === "syncing") continue;
@@ -140,7 +287,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [candidates, atsSyncStatus, syncCandidateToAts]);
 
   // ── Candidate actions ────────────────────────────────────────────
-
   const handleExtractCriteria = useCallback(async () => {
     try {
       const res = await fetch("/api/criteria", {
@@ -172,22 +318,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setCandidates(parsed);
     refreshRanking(criteria, parsed);
 
-    // Auto-push every uploaded candidate to free-ats in the background
     for (const c of parsed) {
       pushCandidateToAts({
-        id: c.id,
-        name: c.name,
-        title: c.title,
-        company: c.company,
-        location: c.location,
-        linkedinUrl: c.linkedinUrl,
+        id: c.id, name: c.name, title: c.title, company: c.company,
+        location: c.location, linkedinUrl: c.linkedinUrl,
       }).then((result) => {
         setAtsSyncStatus((s) => ({ ...s, [c.id]: result.ok ? "synced" : "error" }));
-        if (result.ok && result.atsUrl) {
-          setAtsUrls((u) => ({ ...u, [c.id]: result.atsUrl }));
-        }
+        if (result.ok && result.atsUrl) setAtsUrls((u) => ({ ...u, [c.id]: result.atsUrl }));
+        if (!result.ok) setAtsErrors((err) => ({ ...err, [c.id]: result.error }));
       });
-      // Mark as syncing immediately so the UI reflects it
       setAtsSyncStatus((s) => ({ ...s, [c.id]: "syncing" }));
     }
   };
@@ -207,27 +346,35 @@ export function AppProvider({ children }: { children: ReactNode }) {
       );
       if (!fresh.length) return current;
       const merged = [...current, ...fresh];
-      const ranked = rankCandidates(merged, criteria);
+      const ranked = rankCandidates(merged, criteria, rankingCriteria);
       setShortlist(ranked);
-      // Auto-push fresh candidates to ATS in the background
       fresh.forEach((c) => {
         pushCandidateToAts(c).then((result) => {
           setAtsSyncStatus((s) => ({ ...s, [c.id]: result.ok ? "synced" : "error" }));
           if (result.ok && result.atsUrl) setAtsUrls((u) => ({ ...u, [c.id]: result.atsUrl }));
+          if (!result.ok) setAtsErrors((err) => ({ ...err, [c.id]: result.error }));
         });
         setAtsSyncStatus((s) => ({ ...s, [c.id]: "syncing" }));
       });
       return merged;
     });
-  }, [criteria]);
+  }, [criteria, rankingCriteria]);
 
   const setCandidateStatus = (id: string, status: CandidateStatus) => {
     setStatuses((s) => ({ ...s, [id]: status }));
-    // Ensure approved candidates are always in the ATS
-    if (status === "approved") {
-      syncCandidateToAts(id);
-    }
+    if (status === "approved") syncCandidateToAts(id);
   };
+
+  const clearCandidates = useCallback(() => {
+    setCandidates([]);
+    setShortlist([]);
+    setStatusesRaw({});
+    lsSet("sc_candidates", []);
+    lsSet("sc_statuses", {});
+    setAtsSyncStatus({});
+    setAtsErrors({});
+    setAtsUrls({});
+  }, [setCandidates]);
 
   const setReplyStatus = (id: string, status: ReplyClass) => {
     setReplyStatuses((s) => ({ ...s, [id]: status }));
@@ -241,13 +388,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
       selectedCandidateId, setSelectedCandidateId,
       statuses, replyStatuses, setReplyStatus,
       approvedCount,
-      selectedCandidate, outreachDraft,
+      selectedCandidate,
+      outreachSequence, activeStepIndex, setActiveStep,
+      rankingCriteria, addRankingCriterion, removeRankingCriterion, updateRankingCriterion,
+      prefillBriefFromCandidate,
       handleExtractCriteria, handleCsvUpload, handleTagChange,
       setCandidateStatus,
       addCandidatesToPool,
       replies: sampleReplies,
-      atsSyncStatus, atsUrls,
+      atsSyncStatus, atsErrors, atsUrls,
       syncCandidateToAts, syncAllToAts,
+      clearCandidates,
+      savedSearches, saveCurrentSearch, loadSavedSearch, deleteSavedSearch,
     }}>
       {children}
     </Store.Provider>

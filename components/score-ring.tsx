@@ -1,14 +1,15 @@
-export function ScoreRing({ score, size = 56 }: { score: number; size?: number }) {
+export function ScoreRing({ score, size = 56, title }: { score: number; size?: number; title?: string }) {
   const r = Math.round(size * 0.36);
   const cx = size / 2;
   const cy = size / 2;
   const sw = Math.round(size * 0.08);
   const circumference = 2 * Math.PI * r;
   const offset = circumference * (1 - score / 100);
-  const color = score >= 80 ? "#1d6b52" : score >= 60 ? "#b95c28" : "#9ca3af";
+  const color = score >= 75 ? "#1d6b52" : score >= 50 ? "#b95c28" : "#9ca3af";
 
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ flexShrink: 0 }}>
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ flexShrink: 0 }} role="img" aria-label={title ?? `Score: ${score}`}>
+      {title && <title>{title}</title>}
       <circle cx={cx} cy={cy} r={r} fill="none" stroke="rgba(0,0,0,0.07)" strokeWidth={sw} />
       <circle
         cx={cx} cy={cy} r={r}
@@ -33,6 +34,20 @@ export function ScoreRing({ score, size = 56 }: { score: number; size?: number }
         {score}
       </text>
     </svg>
+  );
+}
+
+export function MatchBadge({ tier, score }: { tier: "good-match" | "potential-fit" | "no-match"; score: number }) {
+  const configs = {
+    "good-match":    { icon: "●", label: "Good Match",    cls: "match-badge-good" },
+    "potential-fit": { icon: "◐", label: "Potential Fit", cls: "match-badge-fit" },
+    "no-match":      { icon: "○", label: "Not a Match",   cls: "match-badge-none" },
+  };
+  const { icon, label, cls } = configs[tier];
+  return (
+    <span className={`match-badge ${cls}`}>
+      {icon} {label} {score}%
+    </span>
   );
 }
 

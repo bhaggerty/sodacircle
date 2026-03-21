@@ -2,128 +2,167 @@
 
 import Link from "next/link";
 import { useStore } from "@/lib/store";
-import { Avatar, ScoreRing } from "@/components/score-ring";
-
-const agents = [
-  {
-    name: "Sourcing Agent",
-    desc: "Scanning LinkedIn, GitHub, HN, and the web for matching profiles.",
-    status: "running" as const,
-    stat: "47 found today",
-  },
-  {
-    name: "Scheduling Agent",
-    desc: "Watches pipeline stages and handles calendar coordination.",
-    status: "coming-soon" as const,
-    stat: "Coming soon",
-  },
-  {
-    name: "Feedback Agent",
-    desc: "Pings interviewers in Slack and extracts structured scorecards.",
-    status: "coming-soon" as const,
-    stat: "Coming soon",
-  },
-];
+import { Avatar, MatchBadge, ScoreRing } from "@/components/score-ring";
 
 export default function DashboardPage() {
-  const { shortlist, approvedCount, replies, statuses } = useStore();
+  const { shortlist, approvedCount, replies, statuses, criteria } = useStore();
 
-  const triaged = Object.keys(replies).length;
-  const outreachSent = Object.values(statuses).filter((s) => s === "approved").length;
+  const goodMatches   = shortlist.filter((c) => c.matchTier === "good-match").length;
+  const potentialFits = shortlist.filter((c) => c.matchTier === "potential-fit").length;
+  const unreviewed    = shortlist.filter((c) => !statuses[c.id] || statuses[c.id] === "new").length;
+  const repliesCount  = replies.length;
+
+  // What should the user do next?
+  const nextAction =
+    shortlist.length === 0
+      ? { href: "/agents",     cta: "Run your first sourcing agent →", sub: "Start with GitHub + HN — takes about 30 seconds." }
+      : approvedCount === 0
+      ? { href: "/candidates", cta: "Review and approve candidates →",  sub: `${goodMatches} good matches and ${potentialFits} potential fits waiting.` }
+      : { href: "/outreach",   cta: "Review outreach drafts →",         sub: `${approvedCount} approved candidate${approvedCount !== 1 ? "s" : ""} ready for outreach.` };
 
   const metrics = [
-    { value: shortlist.length, label: "Profiles sourced", delta: "+12 today", up: true },
-    { value: approvedCount, label: "Approved for outreach", delta: "this search", up: false },
-    { value: outreachSent, label: "Messages sent", delta: "pending send", up: false },
-    { value: triaged, label: "Replies triaged", delta: "auto-classified", up: true },
+    { value: shortlist.length,  label: "In pool",          sub: `${goodMatches} good matches` },
+    { value: approvedCount,     label: "Approved",         sub: "for outreach" },
+    { value: unreviewed,        label: "Awaiting review",  sub: "need a decision" },
+    { value: repliesCount,      label: "Replies",          sub: "inbound messages" },
   ];
 
   return (
     <div className="page">
       <div className="page-header">
         <span className="page-eyebrow">Dashboard</span>
-        <h1 className="page-title">Pipeline at a glance</h1>
+        <h1 className="page-title">
+          {criteria.roleTitle ? `Pipeline — ${criteria.roleTitle}` : "Pipeline at a glance"}
+        </h1>
         <p className="page-subtitle">
-          Your sourcing engine is running. Here&apos;s what&apos;s happening.
+          {criteria.geoPreference ? `${criteria.geoPreference} · ` : ""}
+          {shortlist.length > 0
+            ? `${shortlist.length} profiles sourced, ${approvedCount} approved.`
+            : "No candidates sourced yet. Run an agent to get started."}
         </p>
       </div>
 
-      {/* Metric rings */}
+      {/* Next action callout */}
+      <Link href={nextAction.href} className="dash-next-action">
+        <div>
+          <div className="dash-next-cta">{nextAction.cta}</div>
+          <div className="dash-next-sub">{nextAction.sub}</div>
+        </div>
+        <span style={{ fontSize: "1.4rem", opacity: 0.5 }}>›</span>
+      </Link>
+
+      {/* Metrics */}
       <div className="dash-metrics">
         {metrics.map((m) => (
           <div key={m.label} className="dash-metric-card">
             <span className="dash-metric-value">{m.value}</span>
             <span className="dash-metric-label">{m.label}</span>
-            <span className={`dash-metric-delta ${m.up ? "up" : "neutral"}`}>{m.delta}</span>
+            <span className="dash-metric-delta neutral">{m.sub}</span>
           </div>
         ))}
       </div>
 
       <div className="dash-row">
-        {/* Recent candidates */}
+        {/* Top candidates */}
         <div className="card card-pad">
           <div className="section-header">
             <div>
               <p className="section-label">Top matches</p>
-              <h2 className="section-title">Recent candidates</h2>
+              <h2 className="section-title">Best candidates</h2>
             </div>
             <Link href="/candidates" className="btn btn-ghost btn-sm">View all</Link>
           </div>
-          <div className="recent-list">
-            {shortlist.slice(0, 5).map((c) => (
-              <div key={c.id} className="recent-item">
-                <Avatar name={c.name} size={40} />
-                <div className="recent-item-info">
-                  <div className="recent-item-name">{c.name}</div>
-                  <div className="recent-item-role">{c.title} · {c.company}</div>
-                </div>
-                <ScoreRing score={c.finalScore} size={46} />
-              </div>
-            ))}
-          </div>
+
+          {shortlist.length === 0 ? (
+            <div style={{ padding: "32px 0", textAlign: "center" }}>
+              <p className="muted" style={{ marginBottom: 14 }}>No candidates yet.</p>
+              <Link href="/agents" className="btn btn-primary btn-sm">Run sourcing agent</Link>
+            </div>
+          ) : (
+            <div className="recent-list">
+              {shortlist.slice(0, 6).map((c) => {
+                const st = statuses[c.id];
+                return (
+                  <div key={c.id} className="recent-item">
+                    <Avatar name={c.name} size={38} />
+                    <div className="recent-item-info">
+                      <div className="recent-item-name">{c.name}</div>
+                      <div className="recent-item-role">{c.title} · {c.company}</div>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      {st && st !== "new" && (
+                        <span className={`chip ${st === "approved" ? "chip-accent" : st === "rejected" ? "chip-warn" : "chip-muted"}`} style={{ fontSize: "0.72rem" }}>
+                          {st}
+                        </span>
+                      )}
+                      <ScoreRing score={c.finalScore} size={40} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
-        {/* Agent status */}
+        {/* Pipeline funnel */}
         <div className="card card-pad">
           <div className="section-header">
             <div>
-              <p className="section-label">Automation layer</p>
-              <h2 className="section-title">Agent status</h2>
+              <p className="section-label">Pipeline</p>
+              <h2 className="section-title">Where things stand</h2>
             </div>
-            <Link href="/agents" className="btn btn-ghost btn-sm">Manage</Link>
           </div>
-          <div className="dash-agent-cards">
-            {agents.map((a) => (
-              <div key={a.name} className="dash-agent-card">
-                <div className="dash-agent-header">
-                  <span className="dash-agent-name">{a.name}</span>
-                  <span className={`status-badge ${a.status}`}>
-                    {a.status === "running" ? "Running" : "Soon"}
-                  </span>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {[
+              { label: "Sourced",          count: shortlist.length,  href: "/candidates", color: "var(--accent)",  max: Math.max(shortlist.length, 1) },
+              { label: "Good matches",      count: goodMatches,       href: "/candidates", color: "#1d6b52",         max: Math.max(shortlist.length, 1) },
+              { label: "Potential fits",    count: potentialFits,     href: "/candidates", color: "var(--warn)",     max: Math.max(shortlist.length, 1) },
+              { label: "Approved",          count: approvedCount,     href: "/outreach",   color: "#6b52a8",         max: Math.max(shortlist.length, 1) },
+              { label: "Replied",           count: repliesCount,      href: "/replies",    color: "#2563eb",         max: Math.max(shortlist.length, 1) },
+            ].map(({ label, count, href, color, max }) => (
+              <Link key={label} href={href} className="dash-funnel-row">
+                <span className="dash-funnel-label">{label}</span>
+                <div className="dash-funnel-bar-wrap">
+                  <div
+                    className="dash-funnel-bar"
+                    style={{ width: `${Math.max(count / max * 100, count > 0 ? 4 : 0)}%`, background: color }}
+                  />
                 </div>
-                <p className="dash-agent-meta">{a.desc}</p>
-                <span className="fine">{a.stat}</span>
-              </div>
+                <span className="dash-funnel-count">{count}</span>
+              </Link>
             ))}
+          </div>
+
+          <div style={{ marginTop: 20 }}>
+            <p className="section-label" style={{ marginBottom: 10 }}>Quick actions</p>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              <Link href="/search"     className="btn btn-secondary btn-sm">Build search</Link>
+              <Link href="/agents"     className="btn btn-secondary btn-sm">Run agent</Link>
+              <Link href="/outreach"   className="btn btn-secondary btn-sm">Review outreach</Link>
+              <Link href="/replies"    className="btn btn-secondary btn-sm">Triage replies</Link>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Quick actions */}
-      <div className="card card-pad" style={{ marginTop: 20 }}>
-        <div className="section-header">
-          <div>
-            <p className="section-label">Jump in</p>
-            <h2 className="section-title">Quick actions</h2>
+      {/* Match quality breakdown */}
+      {shortlist.length > 0 && (
+        <div className="card card-pad" style={{ marginTop: 20 }}>
+          <p className="section-label" style={{ marginBottom: 14 }}>Match quality breakdown</p>
+          <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+            {(["good-match", "potential-fit", "no-match"] as const).map((tier) => {
+              const count = shortlist.filter((c) => c.matchTier === tier).length;
+              return (
+                <div key={tier} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <MatchBadge tier={tier} score={0} />
+                  <span style={{ fontFamily: "var(--font-heading)", fontWeight: 700, fontSize: "1.1rem" }}>{count}</span>
+                </div>
+              );
+            })}
           </div>
         </div>
-        <div className="row" style={{ flexWrap: "wrap" }}>
-          <Link href="/search" className="btn btn-primary">Build a search</Link>
-          <Link href="/candidates" className="btn btn-secondary">Browse candidates</Link>
-          <Link href="/outreach" className="btn btn-secondary">Review outreach queue</Link>
-          <Link href="/replies" className="btn btn-secondary">Triage replies</Link>
-        </div>
-      </div>
+      )}
     </div>
   );
 }

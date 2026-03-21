@@ -4,13 +4,18 @@ import { useState, useEffect } from "react";
 import { useStore } from "@/lib/store";
 import { Avatar, ScoreRing } from "@/components/score-ring";
 
+const STEP_LABELS = ["Step 1 · Now", "Step 2 · +3 days", "Step 3 · +7 days"];
+const STEP_CONDITIONS = ["Immediate", "If no reply", "If no reply"];
+
 export default function OutreachPage() {
   const {
     shortlist,
     selectedCandidateId,
     setSelectedCandidateId,
     selectedCandidate,
-    outreachDraft,
+    outreachSequence,
+    activeStepIndex,
+    setActiveStep,
     setCandidateStatus,
     statuses,
     criteria,
@@ -20,19 +25,22 @@ export default function OutreachPage() {
   const [editedSubject, setEditedSubject] = useState("");
   const [editedBody, setEditedBody] = useState("");
 
-  // Reset edit state when selected candidate changes
+  const activeStep = outreachSequence?.[activeStepIndex] ?? null;
+
+  // Reset edit state when candidate or step changes
   useEffect(() => {
     setIsEditing(false);
-    setEditedSubject(outreachDraft?.subject ?? "");
-    setEditedBody(outreachDraft?.body ?? "");
-  }, [selectedCandidateId, outreachDraft?.subject, outreachDraft?.body]);
+    setEditedSubject(activeStep?.subject ?? "");
+    setEditedBody(activeStep?.body ?? "");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCandidateId, activeStepIndex]);
 
   const queue = shortlist.filter(
     (c) => !statuses[c.id] || statuses[c.id] === "approved" || statuses[c.id] === "new"
   );
 
-  const displaySubject = isEditing ? editedSubject : outreachDraft?.subject;
-  const displayBody = isEditing ? editedBody : outreachDraft?.body;
+  const displaySubject = isEditing ? editedSubject : activeStep?.subject;
+  const displayBody = isEditing ? editedBody : activeStep?.body;
 
   return (
     <div className="page">
@@ -75,7 +83,7 @@ export default function OutreachPage() {
         </div>
 
         {/* Right: email composer */}
-        {selectedCandidate && outreachDraft ? (
+        {selectedCandidate && activeStep ? (
           <div className="email-composer">
             <div className="email-header">
               <div className="row">
@@ -88,6 +96,21 @@ export default function OutreachPage() {
                 </div>
                 <span className="spacer" />
                 <ScoreRing score={selectedCandidate.finalScore} size={44} />
+              </div>
+
+              {/* Sequence timeline */}
+              <div className="sequence-timeline">
+                {STEP_LABELS.map((label, i) => (
+                  <button
+                    key={i}
+                    className={`sequence-step ${i === activeStepIndex ? "sequence-step-active" : ""}`}
+                    onClick={() => { setActiveStep(i); setIsEditing(false); }}
+                  >
+                    <span className="sequence-step-num">{i + 1}</span>
+                    <span className="sequence-step-label">{label}</span>
+                    <span className="sequence-step-cond">{STEP_CONDITIONS[i]}</span>
+                  </button>
+                ))}
               </div>
 
               <div>
@@ -104,9 +127,11 @@ export default function OutreachPage() {
                 )}
               </div>
 
-              <div className="email-angle">
-                <strong>Suggested angle</strong> — {selectedCandidate.outreachAngle}
-              </div>
+              {activeStepIndex === 0 && (
+                <div className="email-angle">
+                  <strong>Suggested angle</strong> — {selectedCandidate.outreachAngle}
+                </div>
+              )}
             </div>
 
             {isEditing ? (
@@ -139,8 +164,8 @@ export default function OutreachPage() {
                   <button
                     className="btn btn-ghost btn-sm"
                     onClick={() => {
-                      setEditedSubject(outreachDraft.subject);
-                      setEditedBody(outreachDraft.body);
+                      setEditedSubject(activeStep.subject);
+                      setEditedBody(activeStep.body);
                       setIsEditing(false);
                     }}
                   >
@@ -151,8 +176,8 @@ export default function OutreachPage() {
                 <button
                   className="btn btn-secondary"
                   onClick={() => {
-                    setEditedSubject(outreachDraft.subject);
-                    setEditedBody(outreachDraft.body);
+                    setEditedSubject(activeStep.subject);
+                    setEditedBody(activeStep.body);
                     setIsEditing(true);
                   }}
                 >
