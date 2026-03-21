@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import { useStore } from "@/lib/store";
 import { Avatar, ScoreRing } from "@/components/score-ring";
 
@@ -15,9 +16,23 @@ export default function OutreachPage() {
     criteria,
   } = useStore();
 
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedSubject, setEditedSubject] = useState("");
+  const [editedBody, setEditedBody] = useState("");
+
+  // Reset edit state when selected candidate changes
+  useEffect(() => {
+    setIsEditing(false);
+    setEditedSubject(outreachDraft?.subject ?? "");
+    setEditedBody(outreachDraft?.body ?? "");
+  }, [selectedCandidateId, outreachDraft?.subject, outreachDraft?.body]);
+
   const queue = shortlist.filter(
     (c) => !statuses[c.id] || statuses[c.id] === "approved" || statuses[c.id] === "new"
   );
+
+  const displaySubject = isEditing ? editedSubject : outreachDraft?.subject;
+  const displayBody = isEditing ? editedBody : outreachDraft?.body;
 
   return (
     <div className="page">
@@ -77,7 +92,16 @@ export default function OutreachPage() {
 
               <div>
                 <div className="email-subject-label">Subject line</div>
-                <div className="email-subject">{outreachDraft.subject}</div>
+                {isEditing ? (
+                  <input
+                    className="criteria-input"
+                    style={{ width: "100%", marginTop: 4 }}
+                    value={editedSubject}
+                    onChange={(e) => setEditedSubject(e.target.value)}
+                  />
+                ) : (
+                  <div className="email-subject">{displaySubject}</div>
+                )}
               </div>
 
               <div className="email-angle">
@@ -85,7 +109,16 @@ export default function OutreachPage() {
               </div>
             </div>
 
-            <div className="email-body">{outreachDraft.body}</div>
+            {isEditing ? (
+              <textarea
+                className="email-body-edit"
+                value={editedBody}
+                onChange={(e) => setEditedBody(e.target.value)}
+                rows={14}
+              />
+            ) : (
+              <div className="email-body">{displayBody}</div>
+            )}
 
             <div className="email-footer">
               <button
@@ -94,7 +127,39 @@ export default function OutreachPage() {
               >
                 Approve for send
               </button>
-              <button className="btn btn-secondary">Edit draft</button>
+
+              {isEditing ? (
+                <>
+                  <button
+                    className="btn btn-secondary"
+                    onClick={() => setIsEditing(false)}
+                  >
+                    Save changes
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => {
+                      setEditedSubject(outreachDraft.subject);
+                      setEditedBody(outreachDraft.body);
+                      setIsEditing(false);
+                    }}
+                  >
+                    Discard
+                  </button>
+                </>
+              ) : (
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => {
+                    setEditedSubject(outreachDraft.subject);
+                    setEditedBody(outreachDraft.body);
+                    setIsEditing(true);
+                  }}
+                >
+                  Edit draft
+                </button>
+              )}
+
               <span className="spacer" />
               {statuses[selectedCandidate.id] === "approved" && (
                 <span className="chip chip-accent">Approved</span>

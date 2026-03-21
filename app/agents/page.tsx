@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useStore } from "@/lib/store";
-import { Candidate, SearchCriteria } from "@/lib/types";
+import { Candidate } from "@/lib/types";
 
 type AgentStatus = "idle" | "running" | "paused" | "coming-soon";
 
@@ -24,7 +24,7 @@ function now() {
 }
 
 export default function AgentsPage() {
-  const { criteria, candidates, addCandidatesToPool } = useStore();
+  const { criteria, setCriteria, brief, setBrief, handleExtractCriteria, candidates, addCandidatesToPool } = useStore();
 
   const [sourcingStatus, setSourcingStatus] = useState<AgentStatus>("idle");
   const [log, setLog] = useState<LogEntry[]>([
@@ -33,6 +33,9 @@ export default function AgentsPage() {
   const [lastResult, setLastResult] = useState<SourcingResult | null>(null);
   const [atsTest, setAtsTest] = useState<AtsTestResult | null>(null);
   const [atsTestRunning, setAtsTestRunning] = useState(false);
+  const [showLog, setShowLog] = useState(false);
+  const [showCriteria, setShowCriteria] = useState(false);
+  const [localBrief, setLocalBrief] = useState(brief);
 
   const runAtsTest = async () => {
     setAtsTestRunning(true);
@@ -49,12 +52,12 @@ export default function AgentsPage() {
   };
 
   const addLog = (text: string, type: LogEntry["type"] = "info") =>
-    setLog((l) => [{ text, time: now(), type }, ...l].slice(0, 40));
+    setLog((l) => [{ text, time: now(), type }, ...l].slice(0, 100));
 
   const runSourcing = async (sources: ("github" | "hn")[]) => {
     setSourcingStatus("running");
     addLog(`Starting sourcing run — ${sources.join(", ")}…`);
-    addLog(`Building search from: ${criteria.roleTitle}`);
+    addLog(`Searching for: ${criteria.roleTitle}`);
 
     try {
       const res = await fetch("/api/source", {
@@ -86,14 +89,22 @@ export default function AgentsPage() {
         ).length;
         addLog(`${newCount} new candidates added to pool · ${data.total - newCount} duplicates skipped`, "success");
         setLastResult(data);
+        setShowLog(true);
       } else {
         addLog("No matching candidates found. Try adjusting your search criteria.", "info");
+        setShowLog(true);
       }
     } catch (err) {
       addLog(`Run failed: ${String(err)}`, "error");
+      setShowLog(true);
     } finally {
       setSourcingStatus("idle");
     }
+  };
+
+  const applyBrief = () => {
+    setBrief(localBrief);
+    handleExtractCriteria();
   };
 
   const totalInPool = candidates.length;
@@ -129,11 +140,77 @@ export default function AgentsPage() {
             </span>
           </div>
 
-          <p className="agent-desc">
-            Searches GitHub and Hacker News "Who wants to be hired" threads for profiles
-            matching your search recipe. Every profile found is pushed to free-ats automatically.
-            LinkedIn, conference speakers, and web search coming next.
-          </p>
+          {/* ── What are you looking for? ── */}
+          <div className="agent-brief-box">
+            <p className="agent-log-title" style={{ marginBottom: 8 }}>What are you looking for?</p>
+            <textarea
+              className="agent-brief-input"
+              value={localBrief}
+              onChange={(e) => setLocalBrief(e.target.value)}
+              placeholder="Describe the role and ideal candidate — e.g. 'Senior AE with enterprise SaaS experience, quota-carrying, based in NYC or remote…'"
+              rows={3}
+            />
+            <div className="row" style={{ gap: 8, marginTop: 8 }}>
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={applyBrief}
+                disabled={sourcingStatus === "running"}
+              >
+                Update search criteria
+              </button>
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={() => setShowCriteria((v) => !v)}
+              >
+                {showCriteria ? "Hide criteria ▲" : "Edit criteria ▼"}
+              </button>
+            </div>
+          </div>
+
+          {/* ── Inline criteria editor ── */}
+          {showCriteria && (
+            <div className="agent-criteria-panel">
+              <p className="agent-log-title" style={{ marginBottom: 10 }}>Search criteria</p>
+              <div className="criteria-grid">
+                <div className="criteria-field">
+                  <label className="criteria-label">Role title</label>
+                  <input
+                    className="criteria-input"
+                    value={criteria.roleTitle}
+                    onChange={(e) => setCriteria({ ...criteria, roleTitle: e.target.value })}
+                    placeholder="e.g. Senior Account Executive"
+                  />
+                </div>
+                <div className="criteria-field">
+                  <label className="criteria-label">Location</label>
+                  <input
+                    className="criteria-input"
+                    value={criteria.geoPreference}
+                    onChange={(e) => setCriteria({ ...criteria, geoPreference: e.target.value })}
+                    placeholder="e.g. New York, NY or Remote (US)"
+                  />
+                </div>
+                <div className="criteria-field" style={{ gridColumn: "1 / -1" }}>
+                  <label className="criteria-label">Must-haves (comma-separated)</label>
+                  <input
+                    className="criteria-input"
+                    value={criteria.mustHaves.join(", ")}
+                    onChange={(e) => setCriteria({ ...criteria, mustHaves: e.target.value.split(",").map(s => s.trim()).filter(Boolean) })}
+                    placeholder="e.g. quota-carrying, B2B SaaS, enterprise sales"
+                  />
+                </div>
+                <div className="criteria-field" style={{ gridColumn: "1 / -1" }}>
+                  <label className="criteria-label">Keywords / industries (comma-separated)</label>
+                  <input
+                    className="criteria-input"
+                    value={criteria.searchRecipe?.industry?.join(", ") ?? ""}
+                    onChange={(e) => setCriteria({ ...criteria, searchRecipe: { ...criteria.searchRecipe, industry: e.target.value.split(",").map(s => s.trim()).filter(Boolean) } })}
+                    placeholder="e.g. SaaS, fintech, enterprise software"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="agent-stats">
             <div className="agent-stat">
@@ -161,7 +238,7 @@ export default function AgentsPage() {
             <p className="agent-log-title">Current search</p>
             <div className="chips" style={{ gap: 7 }}>
               <span className="chip chip-accent" style={{ fontSize: "0.78rem" }}>{criteria.roleTitle}</span>
-              {criteria.searchRecipe.industry.map((i) => (
+              {criteria.searchRecipe?.industry?.map((i) => (
                 <span key={i} className="chip" style={{ fontSize: "0.78rem" }}>{i}</span>
               ))}
               {criteria.mustHaves.slice(0, 2).map((m) => (
@@ -195,8 +272,19 @@ export default function AgentsPage() {
 
           {/* Live log */}
           <div className="agent-log">
-            <p className="agent-log-title">Activity log</p>
-            {log.slice(0, 8).map((entry, i) => (
+            <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+              <p className="agent-log-title" style={{ margin: 0 }}>Activity log</p>
+              {log.length > 5 && (
+                <button
+                  className="btn btn-ghost btn-sm"
+                  style={{ fontSize: "0.72rem", padding: "2px 8px" }}
+                  onClick={() => setShowLog((v) => !v)}
+                >
+                  {showLog ? "Show less ▲" : `Show all (${log.length}) ▼`}
+                </button>
+              )}
+            </div>
+            {(showLog ? log : log.slice(0, 5)).map((entry, i) => (
               <div
                 key={i}
                 className="agent-log-item"
@@ -216,12 +304,12 @@ export default function AgentsPage() {
 
           <div className="agent-card-footer">
             <button
-              className="btn btn-primary btn-sm"
-              style={{ background: "linear-gradient(135deg, #1d6b52, #174c3c)" }}
+              className="btn btn-primary"
+              style={{ background: "linear-gradient(135deg, #1d6b52, #174c3c)", minWidth: 120 }}
               onClick={() => runSourcing(["github", "hn"])}
               disabled={sourcingStatus === "running"}
             >
-              {sourcingStatus === "running" ? "Running…" : "Run now"}
+              {sourcingStatus === "running" ? "⟳ Running…" : "▶ Run now"}
             </button>
             <button
               className="btn btn-ghost btn-sm"
@@ -243,7 +331,7 @@ export default function AgentsPage() {
               disabled={atsTestRunning}
               style={{ marginLeft: "auto" }}
             >
-              {atsTestRunning ? "Testing…" : "Test ATS connection"}
+              {atsTestRunning ? "Testing…" : "Test ATS"}
             </button>
           </div>
 

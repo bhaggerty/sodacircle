@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useStore } from "@/lib/store";
 import { Avatar } from "@/components/score-ring";
 import { ReplyClass } from "@/lib/types";
@@ -25,12 +26,23 @@ const replyOptions: ReplyClass[] = [
 ];
 
 export default function RepliesPage() {
-  const { replies, replyStatuses, setReplyStatus } = useStore();
+  const { replies, replyStatuses, setReplyStatus, syncCandidateToAts, atsSyncStatus, atsUrls } = useStore();
+
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  const [showNote, setShowNote] = useState<Record<string, boolean>>({});
+  const [snoozed, setSnoozed] = useState<Record<string, string>>({});
+  const [archived, setArchived] = useState<Record<string, boolean>>({});
 
   const counts = Object.values(replyStatuses).reduce<Record<string, number>>((acc, v) => {
     acc[v] = (acc[v] ?? 0) + 1;
     return acc;
   }, {});
+
+  const snoozeUntil = () => {
+    const d = new Date();
+    d.setDate(d.getDate() + 60);
+    return d.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+  };
 
   return (
     <div className="page">
@@ -56,9 +68,12 @@ export default function RepliesPage() {
       </div>
 
       <div className="replies-grid">
-        {replies.map((reply) => {
+        {replies.filter((r) => !archived[r.candidateId]).map((reply) => {
           const current = replyStatuses[reply.candidateId] ?? reply.classification;
           const meta = CLASS_META[current];
+          const syncStatus = atsSyncStatus[reply.candidateId];
+          const atsUrl = atsUrls[reply.candidateId];
+          const isSnoozed = !!snoozed[reply.candidateId];
 
           return (
             <article key={reply.candidateId} className="reply-card">
@@ -96,18 +111,94 @@ export default function RepliesPage() {
 
               <p className="reply-action-note">{reply.action}</p>
 
-              <div className="row" style={{ flexWrap: "wrap" }}>
+              {/* Snooze notice */}
+              {isSnoozed && (
+                <div className="agent-log-item" style={{ color: "#b95c28", fontSize: "0.8rem" }}>
+                  ◷ Snoozed until {snoozed[reply.candidateId]}
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    style={{ fontSize: "0.72rem", padding: "1px 6px", marginLeft: 8 }}
+                    onClick={() => setSnoozed((s) => { const n = { ...s }; delete n[reply.candidateId]; return n; })}
+                  >
+                    Unsnooze
+                  </button>
+                </div>
+              )}
+
+              <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
                 {current === "interested" && (
-                  <button className="btn btn-primary btn-sm">Create ATS record</button>
+                  <>
+                    {syncStatus === "synced" ? (
+                      <span className="chip chip-accent" style={{ fontSize: "0.78rem" }}>
+                        ✓ In ATS
+                        {atsUrl && (
+                          <a href={atsUrl} target="_blank" rel="noopener noreferrer" style={{ marginLeft: 6, color: "inherit", textDecoration: "underline" }}>
+                            view
+                          </a>
+                        )}
+                      </span>
+                    ) : syncStatus === "syncing" ? (
+                      <span className="chip chip-muted btn-sm" style={{ fontSize: "0.78rem" }}>Syncing…</span>
+                    ) : syncStatus === "error" ? (
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => syncCandidateToAts(reply.candidateId)}
+                      >
+                        Retry ATS sync
+                      </button>
+                    ) : (
+                      <button
+                        className="btn btn-primary btn-sm"
+                        onClick={() => syncCandidateToAts(reply.candidateId)}
+                      >
+                        Create ATS record
+                      </button>
+                    )}
+                  </>
                 )}
-                {current === "maybe later" && (
-                  <button className="btn btn-secondary btn-sm">Snooze 60 days</button>
+
+                {current === "maybe later" && !isSnoozed && (
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => setSnoozed((s) => ({ ...s, [reply.candidateId]: snoozeUntil() }))}
+                  >
+                    Snooze 60 days
+                  </button>
                 )}
+
                 {current === "not interested" && (
-                  <button className="btn btn-ghost btn-sm">Archive</button>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => setArchived((a) => ({ ...a, [reply.candidateId]: true }))}
+                  >
+                    Archive
+                  </button>
                 )}
-                <button className="btn btn-ghost btn-sm">Add note</button>
+
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => setShowNote((n) => ({ ...n, [reply.candidateId]: !n[reply.candidateId] }))}
+                >
+                  {showNote[reply.candidateId] ? "Hide note" : "Add note"}
+                </button>
               </div>
+
+              {/* Inline note editor */}
+              {showNote[reply.candidateId] && (
+                <div style={{ marginTop: 10 }}>
+                  <textarea
+                    className="agent-brief-input"
+                    style={{ minHeight: 64, fontSize: "0.82rem" }}
+                    value={notes[reply.candidateId] ?? ""}
+                    onChange={(e) => setNotes((n) => ({ ...n, [reply.candidateId]: e.target.value }))}
+                    placeholder="Add a note about this candidate…"
+                    rows={3}
+                  />
+                  {notes[reply.candidateId] && (
+                    <p className="fine" style={{ marginTop: 4, color: "#1d6b52" }}>Note saved locally.</p>
+                  )}
+                </div>
+              )}
             </article>
           );
         })}
