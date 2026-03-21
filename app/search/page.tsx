@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useStore } from "@/lib/store";
 
 export default function SearchPage() {
@@ -8,6 +9,16 @@ export default function SearchPage() {
     criteria, setCriteria,
     handleExtractCriteria, handleCsvUpload, handleTagChange,
   } = useStore();
+  const [extracting, setExtracting] = useState(false);
+
+  const handleExtract = async () => {
+    setExtracting(true);
+    try {
+      await handleExtractCriteria();
+    } finally {
+      setExtracting(false);
+    }
+  };
 
   return (
     <div className="page">
@@ -28,8 +39,8 @@ export default function SearchPage() {
               <p className="section-label">Job brief</p>
               <h2 className="section-title">What are you hiring for?</h2>
             </div>
-            <button className="btn btn-primary" onClick={handleExtractCriteria}>
-              Extract with AI
+            <button className="btn btn-primary" onClick={handleExtract} disabled={extracting}>
+              {extracting ? "Extracting…" : "Extract with AI"}
             </button>
           </div>
 

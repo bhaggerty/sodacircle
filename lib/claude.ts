@@ -162,31 +162,39 @@ Experience: ${candidate.experience}`;
 
 // ── Search keyword generation ─────────────────────────────────────
 
-export async function generateSearchKeywords(criteria: SearchCriteria): Promise<string[]> {
+export async function generateSearchKeywords(
+  criteria: SearchCriteria,
+  brief?: string
+): Promise<string[]> {
   if (!hasKey()) {
-    return [
-      criteria.roleTitle,
-      ...criteria.mustHaves,
-      ...criteria.searchRecipe.industry,
-      ...criteria.searchRecipe.evidenceSignals.slice(0, 2),
-    ].filter(Boolean);
+    // Caller provides its own fallback via fallbackKeywords() in route.ts
+    throw new Error("No API key");
   }
 
-  const prompt = `Given this hiring criteria, generate 6-10 short search keywords (single words or short phrases)
-that would help find matching candidates in GitHub bios and Hacker News profiles.
-Criteria: ${JSON.stringify({
-    role: criteria.roleTitle,
-    mustHaves: criteria.mustHaves,
-    industry: criteria.searchRecipe.industry,
-  })}
-Return a JSON array of strings only. Example: ["enterprise sales", "cybersecurity", "SaaS", "B2B"]`;
+  const input = brief
+    ? `Brief: "${brief}"\n\nCriteria: ${JSON.stringify({ role: criteria.roleTitle, mustHaves: criteria.mustHaves, industry: criteria.searchRecipe.industry })}`
+    : `Criteria: ${JSON.stringify({ role: criteria.roleTitle, mustHaves: criteria.mustHaves, industry: criteria.searchRecipe.industry })}`;
+
+  const prompt = `You are a technical sourcing expert. Generate 6-10 concise search keywords to find matching candidates in GitHub profiles and Hacker News posts.
+
+RULES:
+- If the role involves a programming language (Go, Python, Rust, TypeScript, etc.), include the language name exactly as it appears in GitHub (e.g. "golang", "python", "rust")
+- Prefer specific technical terms over generic ones ("golang" not "software engineering")
+- Include short skill/tool names (1-2 words max each)
+- Do NOT include stop words, generic terms like "software", "developer", "engineer" alone
+- Return ONLY a JSON array of strings
+
+${input}
+
+Example output for "senior golang backend engineer": ["golang", "go", "backend", "distributed systems", "microservices"]`;
 
   try {
     const raw = await claudeChat("claude-haiku-4-5-20251001", "", prompt, 256);
     const parsed = parseJson<string[] | { keywords: string[] }>(raw);
-    return Array.isArray(parsed) ? parsed : parsed.keywords ?? [];
+    const result = Array.isArray(parsed) ? parsed : parsed.keywords ?? [];
+    return result.filter((k): k is string => typeof k === "string" && k.length > 0);
   } catch {
-    return [criteria.roleTitle, ...criteria.searchRecipe.industry];
+    throw new Error("Claude keyword generation failed");
   }
 }
 

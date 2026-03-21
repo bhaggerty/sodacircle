@@ -4,8 +4,8 @@
  * Runs real sourcing across GitHub and HN, normalises results to the
  * sodacircle Candidate shape, and returns them.
  *
- * Body: { criteria: SearchCriteria, sources?: ("github" | "hn")[] }
- * Response: { candidates: Candidate[], counts: Record<string, number>, errors: string[] }
+ * Body: { criteria: SearchCriteria, sources?: ("github" | "hn")[], brief?: string }
+ * Response: { candidates: Candidate[], counts: Record<string, number>, keywords: string[], errors: string[], total: number }
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -17,7 +17,6 @@ import { SearchCriteria, Candidate } from "@/lib/types";
 function dedup(candidates: Candidate[]): Candidate[] {
   const seen = new Set<string>();
   return candidates.filter((c) => {
-    // Dedup by LinkedIn URL (if present) or by name+company
     const key = c.linkedinUrl || `${c.name.toLowerCase()}|${c.company.toLowerCase()}`;
     if (seen.has(key)) return false;
     seen.add(key);
@@ -29,9 +28,10 @@ export async function POST(req: NextRequest) {
   const body = await req.json() as {
     criteria: SearchCriteria;
     sources?: ("github" | "hn")[];
+    brief?: string;
   };
 
-  const { criteria } = body;
+  const { criteria, brief } = body;
   const sources = body.sources ?? ["github", "hn"];
 
   const errors: string[] = [];
@@ -41,24 +41,17 @@ export async function POST(req: NextRequest) {
   // ── Build search keywords ────────────────────────────────────────
   let keywords: string[];
   try {
-    keywords = await generateSearchKeywords(criteria);
+    keywords = await generateSearchKeywords(criteria, brief);
   } catch {
-    // Fallback if OpenAI is unavailable
-    keywords = [
-      criteria.roleTitle,
-      ...criteria.mustHaves.slice(0, 2),
-      ...criteria.searchRecipe.industry.slice(0, 2),
-    ].filter(Boolean);
+    keywords = fallbackKeywords(criteria, brief);
   }
+
+  console.log(`[source] keywords=${JSON.stringify(keywords)} geo="${criteria.geoPreference}"`);
 
   // ── GitHub ───────────────────────────────────────────────────────
   if (sources.includes("github")) {
     try {
-      const results = await searchGithub(
-        keywords,
-        criteria.geoPreference,
-        12
-      );
+      const results = await searchGithub(keywords, criteria.geoPreference, 15);
       counts.github = results.length;
       allCandidates.push(
         ...results.map((r) => ({
@@ -86,11 +79,10 @@ export async function POST(req: NextRequest) {
   if (sources.includes("hn")) {
     try {
       const [threadResults, keywordResults] = await Promise.all([
-        searchHn(keywords, 12),
-        searchHnByKeyword(keywords.slice(0, 2).join(" "), 8),
+        searchHn(keywords, criteria.geoPreference, 15),
+        searchHnByKeyword(keywords.slice(0, 2).join(" "), criteria.geoPreference, 10),
       ]);
 
-      // Merge and dedup HN results
       const hnSeen = new Set<string>();
       const hnUnique = [...threadResults, ...keywordResults].filter((c) => {
         if (hnSeen.has(c.id)) return false;
@@ -121,7 +113,6 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // ── Dedup across all sources ─────────────────────────────────────
   const candidates = dedup(allCandidates);
 
   return NextResponse.json({
@@ -131,4 +122,47 @@ export async function POST(req: NextRequest) {
     errors,
     total: candidates.length,
   });
+}
+
+/**
+ * Keyword fallback when Claude is unavailable.
+ * Tokenizes both criteria fields and the raw brief to extract meaningful terms.
+ */
+function fallbackKeywords(criteria: SearchCriteria, brief?: string): string[] {
+  const stopWords = new Set([
+    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
+    "of", "with", "by", "from", "as", "is", "was", "are", "be", "been",
+    "that", "this", "it", "they", "we", "you", "he", "she",
+    "have", "has", "had", "will", "would", "could", "should",
+    "who", "what", "where", "when", "how", "why",
+    "need", "want", "looking", "seeking", "hiring",
+  ]);
+
+  // Collect all text sources
+  const sources = [
+    brief ?? "",
+    criteria.roleTitle,
+    ...criteria.mustHaves,
+    ...criteria.searchRecipe.industry,
+    ...criteria.searchRecipe.evidenceSignals.slice(0, 3),
+  ].filter(Boolean);
+
+  // Tokenize and score: prefer short specific words (2-15 chars)
+  const freq: Record<string, number> = {};
+  for (const src of sources) {
+    const words = src
+      .toLowerCase()
+      .split(/[\s,/+&()\[\]]+/)
+      .map((w) => w.replace(/[^a-z0-9#.+]/g, ""))
+      .filter((w) => w.length >= 2 && w.length <= 20 && !stopWords.has(w));
+    for (const w of words) {
+      freq[w] = (freq[w] ?? 0) + 1;
+    }
+  }
+
+  // Sort by frequency, prefer shorter more specific terms
+  return Object.entries(freq)
+    .sort(([a, fa], [b, fb]) => fb - fa || a.length - b.length)
+    .map(([w]) => w)
+    .slice(0, 8);
 }

@@ -36,6 +36,7 @@ export default function AgentsPage() {
   const [showLog, setShowLog] = useState(false);
   const [showCriteria, setShowCriteria] = useState(false);
   const [localBrief, setLocalBrief] = useState(brief);
+  const [extracting, setExtracting] = useState(false);
 
   const runAtsTest = async () => {
     setAtsTestRunning(true);
@@ -57,13 +58,13 @@ export default function AgentsPage() {
   const runSourcing = async (sources: ("github" | "hn")[]) => {
     setSourcingStatus("running");
     addLog(`Starting sourcing run — ${sources.join(", ")}…`);
-    addLog(`Searching for: ${criteria.roleTitle}`);
+    addLog(`Searching for: ${criteria.roleTitle}${criteria.geoPreference ? ` · ${criteria.geoPreference}` : ""}`);
 
     try {
       const res = await fetch("/api/source", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ criteria, sources }),
+        body: JSON.stringify({ criteria, sources, brief: localBrief }),
       });
 
       const data = await res.json() as SourcingResult;
@@ -102,9 +103,30 @@ export default function AgentsPage() {
     }
   };
 
-  const applyBrief = () => {
+  const applyBrief = async () => {
     setBrief(localBrief);
-    handleExtractCriteria();
+    setExtracting(true);
+    try {
+      // Use Claude to extract structured criteria from the brief
+      const res = await fetch("/api/criteria", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ brief: localBrief, seed: criteria }),
+      });
+      if (res.ok) {
+        const next = await res.json();
+        setCriteria(next);
+        addLog(`Search updated: ${next.roleTitle}${next.geoPreference ? ` · ${next.geoPreference}` : ""}`, "success");
+      } else {
+        await handleExtractCriteria();
+        addLog(`Search criteria updated`, "info");
+      }
+    } catch {
+      await handleExtractCriteria();
+      addLog(`Search criteria updated`, "info");
+    } finally {
+      setExtracting(false);
+    }
   };
 
   const totalInPool = candidates.length;
@@ -154,9 +176,9 @@ export default function AgentsPage() {
               <button
                 className="btn btn-secondary btn-sm"
                 onClick={applyBrief}
-                disabled={sourcingStatus === "running"}
+                disabled={sourcingStatus === "running" || extracting}
               >
-                Update search criteria
+                {extracting ? "Parsing…" : "Update search criteria"}
               </button>
               <button
                 className="btn btn-ghost btn-sm"

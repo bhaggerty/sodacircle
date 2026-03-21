@@ -31,7 +31,6 @@ async function getLatestHiringThread(): Promise<string | null> {
   const res = await fetch(url, { next: { revalidate: 3600 } });
   if (!res.ok) return null;
   const data = await res.json() as AlgoliaResponse;
-  // Pick the most recent thread
   const thread = data.hits
     .filter((h) => /who wants to be hired/i.test(h.title ?? ""))
     .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
@@ -79,7 +78,6 @@ function parseComment(hit: AlgoliaHit): SourcedCandidate | null {
 
   const text = strip(raw);
 
-  // Must look like a job-seeker comment — check for common markers
   const hasMarkers =
     /\b(seeking|location|remote|technologies|skills|email|resume|available)\b/i.test(text);
   if (!hasMarkers) return null;
@@ -93,10 +91,7 @@ function parseComment(hit: AlgoliaHit): SourcedCandidate | null {
     ? resumeUrl
     : text.match(/https?:\/\/(?:www\.)?linkedin\.com\/[^\s|<\n]+/i)?.[0] ?? "";
 
-  // Build a readable summary from the whole comment (truncated)
   const summary = text.replace(/\n+/g, " ").slice(0, 400);
-
-  // Derive a title from technologies or first line
   const firstLine = text.split(/\n/)[0].trim().slice(0, 100);
   const title = technologies
     ? `${technologies.split(",")[0].trim()} Professional`
@@ -131,40 +126,108 @@ function isRelevant(candidate: SourcedCandidate, keywords: string[]): boolean {
   return keywords.some((kw) => haystack.includes(kw.toLowerCase()));
 }
 
+// ── Location filtering ────────────────────────────────────────────
+
+const NON_US_MARKERS = [
+  "london", "united kingdom", " uk", "england", "scotland", "wales",
+  "germany", "berlin", "munich",
+  "france", "paris",
+  "india", "bangalore", "bengaluru", "mumbai", "delhi", "hyderabad", "pune",
+  "china", "beijing", "shanghai",
+  "canada", "toronto", "vancouver", "montreal",
+  "australia", "sydney", "melbourne",
+  "netherlands", "amsterdam",
+  "spain", "madrid", "barcelona",
+  "italy", "rome", "milan",
+  "japan", "tokyo",
+  "singapore",
+  "brazil", "são paulo", "sao paulo",
+  "pakistan", "nigeria", "kenya", "south africa",
+  "poland", "warsaw", "ukraine", "kyiv",
+  "sweden", "stockholm", "norway", "oslo",
+  "denmark", "copenhagen",
+  "switzerland", "zurich",
+  "finland", "helsinki",
+  "new zealand", "auckland",
+  "israel", "tel aviv",
+  "turkey", "istanbul",
+  "mexico", "mexico city",
+];
+
+const US_MARKERS = [
+  "united states", "usa", "u.s.", "us ", " us", "america",
+  "new york", "nyc", "san francisco", "sf", "bay area", "silicon valley",
+  "seattle", "los angeles", "austin", "boston", "chicago", "denver",
+  "atlanta", "miami", "portland", "remote us", "us remote",
+  "east coast", "west coast", "midwest",
+];
+
+function isLocationMatch(candidate: SourcedCandidate, geoPreference: string): boolean {
+  if (!geoPreference) return true;
+
+  const geo = geoPreference.toLowerCase();
+  const cloc = (candidate.location + " " + candidate.summary).toLowerCase();
+
+  const isUsSearch = /\b(united states|usa|u\.s\.|new york|san francisco|seattle|us only|remote us|west coast|east coast)\b/.test(geo)
+    || /remote\s*\(?\s*(us|usa)\s*\)?/.test(geo);
+
+  if (!isUsSearch) return true;
+
+  // If candidate location is empty/unknown → keep them
+  if (!candidate.location) return true;
+
+  // Explicit "worldwide" or no location context → keep
+  if (/worldwide|anywhere|nomad/i.test(cloc)) return true;
+
+  // If candidate mentions US/remote → keep
+  if (US_MARKERS.some((m) => cloc.includes(m))) return true;
+
+  // If candidate is clearly non-US → exclude
+  if (NON_US_MARKERS.some((m) => cloc.includes(m))) return false;
+
+  // Unknown location → keep (benefit of the doubt)
+  return true;
+}
+
 // ── Public API ────────────────────────────────────────────────────
 
 export async function searchHn(
   keywords: string[],
+  geoPreference?: string,
   maxResults = 15
 ): Promise<SourcedCandidate[]> {
   const threadId = await getLatestHiringThread();
   if (!threadId) return [];
 
-  // Fetch up to 2 pages of comments
-  const [page0, page1] = await Promise.all([
+  // Fetch up to 3 pages of comments for better coverage
+  const pages = await Promise.all([
     fetchThreadComments(threadId, 0),
     fetchThreadComments(threadId, 1),
+    fetchThreadComments(threadId, 2),
   ]);
 
-  const allComments = [...page0, ...page1];
+  const allComments = pages.flat();
 
   const parsed = allComments
     .map(parseComment)
     .filter((c): c is SourcedCandidate => c !== null);
 
-  // Filter by keyword relevance if keywords are provided, otherwise return all
+  // Filter by keyword relevance
   const relevant = keywords.length > 0
     ? parsed.filter((c) => isRelevant(c, keywords))
     : parsed;
 
-  return relevant.slice(0, maxResults);
+  // Filter by location
+  const locationFiltered = geoPreference
+    ? relevant.filter((c) => isLocationMatch(c, geoPreference))
+    : relevant;
+
+  return locationFiltered.slice(0, maxResults);
 }
 
-/**
- * Also search HN by keyword directly (useful for non-standard post formats)
- */
 export async function searchHnByKeyword(
   query: string,
+  geoPreference?: string,
   maxResults = 10
 ): Promise<SourcedCandidate[]> {
   const url = `${ALGOLIA}/search?tags=comment&query=${encodeURIComponent(query + " SEEKING")}&hitsPerPage=${maxResults * 2}`;
@@ -172,8 +235,12 @@ export async function searchHnByKeyword(
   if (!res.ok) return [];
 
   const data = await res.json() as AlgoliaResponse;
-  return data.hits
+  const candidates = data.hits
     .map(parseComment)
-    .filter((c): c is SourcedCandidate => c !== null)
-    .slice(0, maxResults);
+    .filter((c): c is SourcedCandidate => c !== null);
+
+  return (geoPreference
+    ? candidates.filter((c) => isLocationMatch(c, geoPreference))
+    : candidates
+  ).slice(0, maxResults);
 }

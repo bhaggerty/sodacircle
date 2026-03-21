@@ -50,7 +50,7 @@ type StoreCtx = {
   approvedCount: number;
   selectedCandidate: RankedCandidate | undefined;
   outreachDraft: { subject: string; body: string } | null;
-  handleExtractCriteria: () => void;
+  handleExtractCriteria: () => Promise<void>;
   handleCsvUpload: (e: ChangeEvent<HTMLInputElement>) => Promise<void>;
   handleTagChange: (field: keyof SearchCriteria, value: string) => void;
   setCandidateStatus: (id: string, status: CandidateStatus) => void;
@@ -141,11 +141,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   // ── Candidate actions ────────────────────────────────────────────
 
-  const handleExtractCriteria = () => {
+  const handleExtractCriteria = useCallback(async () => {
+    try {
+      const res = await fetch("/api/criteria", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ brief, seed: criteria }),
+      });
+      if (res.ok) {
+        const next = await res.json() as SearchCriteria;
+        setCriteria(next);
+        refreshRanking(next);
+        return;
+      }
+    } catch {
+      // fall through to regex fallback
+    }
     const next = parseBriefToCriteria(brief, criteria);
     setCriteria(next);
     refreshRanking(next);
-  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [brief, criteria]);
 
   const handleCsvUpload = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
