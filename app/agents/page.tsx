@@ -14,6 +14,9 @@ type SourcingResult = {
   total: number;
 };
 
+type AtsTestStep = { step: string; status: "ok" | "fail" | "skip"; detail: string };
+type AtsTestResult = { ok: boolean; steps: AtsTestStep[] };
+
 type LogEntry = { text: string; time: string; type: "info" | "success" | "error" };
 
 function now() {
@@ -28,6 +31,22 @@ export default function AgentsPage() {
     { text: "Agent ready. Click Run to start sourcing.", time: now(), type: "info" },
   ]);
   const [lastResult, setLastResult] = useState<SourcingResult | null>(null);
+  const [atsTest, setAtsTest] = useState<AtsTestResult | null>(null);
+  const [atsTestRunning, setAtsTestRunning] = useState(false);
+
+  const runAtsTest = async () => {
+    setAtsTestRunning(true);
+    setAtsTest(null);
+    try {
+      const res = await fetch("/api/ats/test");
+      const data = await res.json() as AtsTestResult;
+      setAtsTest(data);
+    } catch (err) {
+      setAtsTest({ ok: false, steps: [{ step: "Fetch", status: "fail", detail: String(err) }] });
+    } finally {
+      setAtsTestRunning(false);
+    }
+  };
 
   const addLog = (text: string, type: LogEntry["type"] = "info") =>
     setLog((l) => [{ text, time: now(), type }, ...l].slice(0, 40));
@@ -218,7 +237,36 @@ export default function AgentsPage() {
             >
               HN only
             </button>
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={runAtsTest}
+              disabled={atsTestRunning}
+              style={{ marginLeft: "auto" }}
+            >
+              {atsTestRunning ? "Testing…" : "Test ATS connection"}
+            </button>
           </div>
+
+          {/* ATS test results */}
+          {atsTest && (
+            <div className="agent-log" style={{ marginTop: 0 }}>
+              <p className="agent-log-title">
+                ATS connection test —{" "}
+                <span style={{ color: atsTest.ok ? "#1d6b52" : "#c2410c", fontWeight: 700 }}>
+                  {atsTest.ok ? "All good" : "Failed"}
+                </span>
+              </p>
+              {atsTest.steps.map((s, i) => (
+                <div key={i} className="agent-log-item" style={{
+                  color: s.status === "ok" ? "#1d6b52" : s.status === "fail" ? "#c2410c" : "var(--muted)",
+                }}>
+                  <strong>{s.status === "ok" ? "✓" : s.status === "fail" ? "✕" : "—"} {s.step}</strong>
+                  <br />
+                  <span style={{ fontSize: "0.75rem", color: "var(--muted)" }}>{s.detail}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* ── Scheduling Agent ── */}

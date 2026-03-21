@@ -44,12 +44,49 @@ async function githubFetch(url: string): Promise<Response> {
   return fetch(url, { headers, next: { revalidate: 300 } });
 }
 
+/**
+ * Distil long phrases into short bio-friendly terms.
+ * "Enterprise quota-carrying sales" → ["sales", "enterprise"]
+ * "Cybersecurity or identity adjacency" → ["cybersecurity", "security"]
+ */
+function distilKeywords(keywords: string[]): string[] {
+  const stopWords = new Set([
+    "or", "and", "the", "a", "an", "of", "in", "at", "to", "for",
+    "with", "only", "no", "not", "only", "background", "adjacency",
+    "evidence", "history", "preference", "comfort", "mentality",
+  ]);
+
+  const short: string[] = [];
+  for (const kw of keywords) {
+    // If the keyword is already short and clean, use it directly
+    if (kw.length <= 20 && !kw.includes(" ")) {
+      short.push(kw.toLowerCase());
+      continue;
+    }
+    // Split on spaces and common separators, keep meaningful tokens
+    const tokens = kw
+      .toLowerCase()
+      .split(/[\s,/+&-]+/)
+      .map((t) => t.replace(/[^a-z0-9]/g, ""))
+      .filter((t) => t.length >= 4 && !stopWords.has(t));
+    short.push(...tokens);
+  }
+
+  // Deduplicate and cap at 4 terms (GitHub query length limit)
+  return [...new Set(short)].slice(0, 4);
+}
+
 function buildGithubQuery(keywords: string[], location?: string): string {
-  // GitHub user search supports: keyword in:bio, location:X, language:X, followers:>N
-  const parts = keywords.slice(0, 4).map((k) => `"${k}" in:bio`);
-  if (location) parts.push(`location:"${location}"`);
-  // Prefer hireable users and those with a meaningful follower count
-  parts.push("followers:>10");
+  const terms = distilKeywords(keywords);
+  // Use OR so we cast a wide net — requiring all terms returns almost nothing
+  const bioClause = terms.map((k) => `"${k}" in:bio`).join(" OR ");
+  const parts = [`(${bioClause})`];
+  if (location) {
+    // Extract just the region name, not "Remote (US) with West Coast preference"
+    const region = location.replace(/remote.*?with\s*/i, "").replace(/preference/i, "").trim().split(/[,(]/)[0].trim();
+    if (region && region.length < 30) parts.push(`location:"${region}"`);
+  }
+  parts.push("followers:>5");
   return parts.join(" ");
 }
 
