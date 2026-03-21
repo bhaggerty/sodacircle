@@ -11,7 +11,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { searchGithub } from "@/lib/sources/github";
 import { searchHn, searchHnByKeyword } from "@/lib/sources/hn";
-import { generateSearchKeywords } from "@/lib/openai";
+import { generateSearchKeywords } from "@/lib/claude";
 import { SearchCriteria, Candidate } from "@/lib/types";
 
 function dedup(candidates: Candidate[]): Candidate[] {
