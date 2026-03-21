@@ -1,17 +1,18 @@
 /**
- * Background crawler engine — singleton, runs as a persistent async loop
- * inside the Next.js dev-server process.
+ * Background crawler — GitHub API + web crawling for engineer profiles.
  *
- * Sources:
- *   1. GitHub Search API  — users by language / location / followers
- *   2. Web pages          — company team/about pages, devlists, indie directories
+ * Strategy:
+ *   1. GitHub Search API  — query users by language/bio/location, then fetch their full profile
+ *   2. GitHub Org members — enumerate members of known identity/security orgs
+ *   3. Web pages          — team/about pages parsed with cheerio
  *
- * Rate limits:
- *   GitHub authenticated: 30 reqs/min  → 2 s between calls
- *   Web per domain      : 3 s minimum
- *   Overall cap         : ~1 req/s
+ * Rate limits (respected):
+ *   GitHub authenticated  : 30 search reqs/min  → 2.2 s gap
+ *   GitHub user/org APIs  : 5000 reqs/hr        → no throttle needed
+ *   Web per domain        : 3 s minimum gap
  */
 
+import * as cheerio from "cheerio";
 import {
   appendProfile,
   loadVisited,
@@ -21,128 +22,149 @@ import {
   IndexedProfile,
 } from "./store";
 
-// ── Types ────────────────────────────────────────────────────────────────────
-
-interface QueueItem {
-  url: string;
-  source: "github" | "web";
-  priority: number; // higher = sooner
-}
-
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const GITHUB_API = "https://api.github.com";
-const GITHUB_DELAY = 2200; // ms between GitHub calls
-const WEB_DELAY    = 3500; // ms between web calls to same domain
-const MAX_QUEUE    = 5000;
-const SAVE_EVERY   = 50;   // persist visited set every N iterations
+const GITHUB_API    = "https://api.github.com";
+const SEARCH_DELAY  = 2500;  // ms between GitHub search calls (rate limit)
+const WEB_DELAY     = 3000;  // ms between requests to the same domain
+const SAVE_EVERY    = 30;    // persist visited set every N iterations
+const MAX_QUEUE     = 3000;
 
-// Seed web pages — tuned for identity / security / Go engineering talent
-const WEB_SEEDS = [
-  // IAM / identity vendor team pages
-  "https://www.conductorone.com/about",
-  "https://www.okta.com/company/",
-  "https://www.sailpoint.com/company/",
-  "https://www.saviynt.com/about-us/",
-  "https://www.cyberark.com/company/about-cyberark/",
-  "https://www.beyond.com/about",
-  "https://www.opal.dev/about",
-  "https://www.indent.com/about",
-  "https://www.entitle.io/about",
-  // Security / infra engineers on GitHub Trending
-  "https://github.com/trending/go",
-  "https://github.com/trending/rust",
-  // Community hubs
-  "https://news.ycombinator.com/jobs",
-  "https://dev.to/t/go",
-  "https://dev.to/t/security",
-  // IAM / security conference speaker lists
-  "https://www.identiverse.com/speakers/",
-  "https://www.rsaconference.com/speakers",
+// GitHub orgs whose members are likely ConductorOne-relevant
+const GITHUB_ORGS = [
+  "conductorone", "okta", "hashicorp", "teleport-oss", "gravitational",
+  "open-policy-agent", "spiffe", "cncf", "crossplane", "cert-manager",
+  "dexidp", "oauth2-proxy", "ory", "casdoor", "zitadel", "logto-io",
+  "keycloak", "gluu", "supertokens-core", "infisical", "dopplerhq",
+  "snyk", "bridgecrewio", "aquasecurity", "falcosecurity",
 ];
 
-// GitHub search queries — prioritises Go + identity/security/infra engineers
+// GitHub search queries — Go + IAM/identity/security focus
 const GITHUB_QUERIES = [
-  // Go engineers (core Baton SDK language)
-  "language:go followers:>30",
-  "language:go followers:>100",
-  "language:go bio:identity followers:>10",
-  "language:go bio:security followers:>10",
-  "language:go bio:iam followers:>5",
-  "language:go bio:platform followers:>15",
-  "language:go bio:infrastructure followers:>10",
-  // Rust — common for security tooling
-  "language:rust bio:security followers:>15",
-  "language:rust followers:>50",
-  // General security / identity engineers
-  "bio:identity followers:>20",
-  "bio:\"access management\" followers:>10",
-  "bio:iam followers:>10",
+  "language:go followers:>50",
+  "language:go followers:>20 repos:>10",
+  "language:go bio:identity",
+  "language:go bio:security",
+  "language:go bio:iam",
+  "language:go bio:platform",
+  "language:go bio:infrastructure",
+  "language:go bio:kubernetes",
+  "language:go bio:cloud",
+  "language:rust bio:security followers:>20",
+  "language:rust followers:>30",
+  "bio:\"identity governance\" followers:>5",
+  "bio:\"access management\" followers:>5",
   "bio:\"zero trust\" followers:>5",
   "bio:okta followers:>5",
+  "bio:iam followers:>10",
   "bio:saml followers:>5",
   "bio:scim followers:>5",
-  "bio:\"identity governance\" followers:>5",
   "bio:sso followers:>10",
-  // Platform / infra engineers
-  "bio:\"platform engineer\" followers:>20",
-  "bio:devops followers:>30",
-  "bio:kubernetes followers:>20",
-  // Senior talent signals
-  "bio:cto followers:>50",
-  "bio:\"staff engineer\" followers:>20",
-  "bio:\"principal engineer\" followers:>15",
-  // Geo clusters
-  "language:go location:\"San Francisco\" followers:>10",
-  "language:go location:\"New York\" followers:>10",
-  "language:go location:\"Seattle\" followers:>10",
-  "language:go location:\"Austin\" followers:>10",
-  "language:go location:\"Remote\" followers:>10",
-  "language:go location:\"Portland\" followers:>10",
-  "language:go location:\"Denver\" followers:>10",
+  "bio:\"privileged access\" followers:>5",
+  "bio:\"staff engineer\" language:go",
+  "bio:\"principal engineer\" language:go",
+  "bio:cto language:go followers:>30",
+  "language:go location:\"San Francisco\"",
+  "language:go location:\"Seattle\"",
+  "language:go location:\"New York\"",
+  "language:go location:\"Austin\"",
+  "language:go location:\"Denver\"",
+  "language:go location:\"Portland\"",
 ];
 
-// ── Module-level singleton state ──────────────────────────────────────────────
+// Web seeds — team/about pages of identity/security companies
+const WEB_SEEDS = [
+  "https://www.teleport.dev/about",
+  "https://infisical.com/about",
+  "https://workos.com/about",
+  "https://stytch.com/about",
+  "https://www.strongdm.com/company",
+  "https://www.beyondidentity.com/about",
+  "https://opal.dev/about",
+  "https://www.indent.com",
+  "https://github.com/trending/go?since=weekly",
+  "https://github.com/trending/rust?since=weekly",
+];
 
-let _running = false;
-let _stopRequested = false;
-let _visitedUrls: Set<string> = new Set();
+// ── Types ────────────────────────────────────────────────────────────────────
+
+interface QueueItem { url: string; priority: number }
+
+interface GHSearchResult { items: GHUserStub[]; total_count: number }
+interface GHUserStub    { login: string; html_url: string; url: string }
+interface GHUserDetail  {
+  login: string; name: string | null; bio: string | null;
+  company: string | null; location: string | null; email: string | null;
+  html_url: string; blog: string | null;
+  public_repos: number; followers: number;
+}
+interface GHOrgMember { login: string; html_url: string; url: string }
+
+// ── Module-level state ───────────────────────────────────────────────────────
+
+let _running        = false;
+let _stopRequested  = false;
+let _visited        = new Set<string>();
 let _queue: QueueItem[] = [];
-let _domainLastFetch: Map<string, number> = new Map();
-let _githubQueryIndex = 0;
-let _githubPageIndex  = 1;
-let _iteration = 0;
+let _domainLastFetch    = new Map<string, number>();
+let _robotsCache        = new Map<string, string[]>();
+
+let _githubQueryIdx = 0;
+let _githubPageIdx  = 1;
+let _orgIdx         = 0;
+let _orgMemberPage  = 1;
+let _iteration      = 0;
+
 let _stats = { pages: 0, profiles: 0, errors: 0 };
 let _recentFinds: Array<{ name: string; title: string; company: string; time: string }> = [];
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-function getDomain(url: string): string {
+function domain(url: string): string {
   try { return new URL(url).hostname; } catch { return url; }
 }
 
-async function waitForDomain(domain: string, delayMs: number) {
-  const last = _domainLastFetch.get(domain) ?? 0;
-  const wait = Math.max(0, last + delayMs - Date.now());
+async function waitDomain(d: string, ms: number) {
+  const last = _domainLastFetch.get(d) ?? 0;
+  const wait = Math.max(0, last + ms - Date.now());
   if (wait > 0) await sleep(wait);
-  _domainLastFetch.set(domain, Date.now());
+  _domainLastFetch.set(d, Date.now());
 }
 
-async function fetchJson<T>(url: string, headers: Record<string, string> = {}): Promise<T | null> {
-  try {
-    const token = process.env.GITHUB_TOKEN;
-    const h: Record<string, string> = {
-      "User-Agent": "sodacircle-crawler/1.0",
-      Accept: "application/json",
-      ...headers,
-    };
-    if (token && url.startsWith(GITHUB_API)) h["Authorization"] = `Bearer ${token}`;
+function enqueue(url: string, priority = 5) {
+  if (_visited.has(url) || _queue.some((q) => q.url === url)) return;
+  if (_queue.length >= MAX_QUEUE) return;
+  _queue.push({ url, priority });
+  _queue.sort((a, b) => b.priority - a.priority);
+}
 
-    const res = await fetch(url, { headers: h, signal: AbortSignal.timeout(10000) });
+function recordFind(p: IndexedProfile) {
+  _recentFinds.unshift({ name: p.name, title: p.title, company: p.company, time: new Date().toISOString() });
+  if (_recentFinds.length > 30) _recentFinds = _recentFinds.slice(0, 30);
+}
+
+// ── GitHub fetch helpers ──────────────────────────────────────────────────────
+
+async function ghFetch<T>(path: string): Promise<T | null> {
+  const token = process.env.GITHUB_TOKEN;
+  const headers: Record<string, string> = {
+    "User-Agent": "sodacircle-recruiter/1.0",
+    Accept: "application/vnd.github+json",
+  };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  try {
+    const res = await fetch(`${GITHUB_API}${path}`, {
+      headers,
+      signal: AbortSignal.timeout(12000),
+    });
+    if (res.status === 403 || res.status === 429) {
+      // Rate limited — wait 60 s
+      await sleep(60000);
+      return null;
+    }
     if (!res.ok) return null;
     return res.json() as Promise<T>;
   } catch {
@@ -150,71 +172,159 @@ async function fetchJson<T>(url: string, headers: Record<string, string> = {}): 
   }
 }
 
-async function fetchHtml(url: string): Promise<string | null> {
-  try {
-    const res = await fetch(url, {
-      headers: { "User-Agent": "sodacircle-crawler/1.0", Accept: "text/html" },
-      signal: AbortSignal.timeout(12000),
-    });
-    if (!res.ok) return null;
-    const ct = res.headers.get("content-type") ?? "";
-    if (!ct.includes("html") && !ct.includes("text")) return null;
-    return res.text();
-  } catch {
-    return null;
+// ── Skill extraction ──────────────────────────────────────────────────────────
+
+const SKILL_KEYWORDS = [
+  // IAM / identity
+  "iam","identity","access management","zero trust","sso","saml","oauth","oidc","scim",
+  "okta","azure ad","active directory","ldap","sailpoint","cyberark","saviynt","ping identity",
+  "identity governance","privileged access","pam","jit access","entitlements","rbac","abac","iga",
+  // Security
+  "security","appsec","devsecops","soc2","compliance","zero trust","penetration testing",
+  // Languages
+  "go","golang","rust","typescript","python","java","kotlin","swift","c++",
+  // Cloud / infra
+  "aws","gcp","azure","kubernetes","k8s","docker","terraform","pulumi","helm",
+  "platform engineering","devops","sre","infrastructure","ci/cd",
+  // Backend
+  "grpc","graphql","rest","protobuf","microservices","distributed systems",
+  "postgresql","redis","dynamodb","kafka","nats",
+];
+
+function extractSkills(text: string): string[] {
+  const lower = text.toLowerCase();
+  return SKILL_KEYWORDS.filter((k) => lower.includes(k)).slice(0, 12);
+}
+
+function inferTitle(bio: string, followers: number): string {
+  const b = bio.toLowerCase();
+  const roles = [
+    ["cto", "CTO"], ["vp of engineering", "VP Engineering"], ["vp engineering", "VP Engineering"],
+    ["staff engineer", "Staff Engineer"], ["principal engineer", "Principal Engineer"],
+    ["founding engineer", "Founding Engineer"], ["co-founder", "Co-Founder"], ["founder", "Founder"],
+    ["platform engineer", "Platform Engineer"], ["security engineer", "Security Engineer"],
+    ["identity engineer", "Identity Engineer"], ["infrastructure engineer", "Infrastructure Engineer"],
+    ["backend engineer", "Backend Engineer"], ["software engineer", "Software Engineer"],
+    ["developer", "Developer"], ["architect", "Architect"],
+    ["engineering manager", "Engineering Manager"], ["director of engineering", "Director of Engineering"],
+  ];
+  for (const [key, label] of roles) {
+    if (b.includes(key)) return label;
   }
+  return followers > 500 ? "Software Engineer" : "Developer";
 }
 
-function cleanHtml(html: string): string {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<nav[\s\S]*?<\/nav>/gi, " ")
-    .replace(/<footer[\s\S]*?<\/footer>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-    .replace(/&nbsp;/g, " ").replace(/&#\d+;/g, " ")
-    .replace(/\s{3,}/g, "  ")
-    .trim()
-    .slice(0, 8000);
+// ── GitHub: search users ──────────────────────────────────────────────────────
+
+async function crawlGitHubSearch(): Promise<number> {
+  const q    = GITHUB_QUERIES[_githubQueryIdx % GITHUB_QUERIES.length];
+  const page = _githubPageIdx;
+
+  await waitDomain("api.github.com", SEARCH_DELAY);
+
+  const result = await ghFetch<GHSearchResult>(
+    `/search/users?q=${encodeURIComponent(q)}&per_page=30&page=${page}&sort=followers`
+  );
+
+  if (!result?.items?.length) {
+    _githubQueryIdx++;
+    _githubPageIdx = 1;
+    return 0;
+  }
+
+  _githubPageIdx++;
+  if (_githubPageIdx > 5) { _githubQueryIdx++; _githubPageIdx = 1; }
+
+  return await processGitHubUsers(result.items);
 }
 
-function recordFind(p: IndexedProfile) {
-  _recentFinds.unshift({ name: p.name, title: p.title, company: p.company, time: new Date().toISOString() });
-  if (_recentFinds.length > 20) _recentFinds = _recentFinds.slice(0, 20);
+// ── GitHub: org members ───────────────────────────────────────────────────────
+
+async function crawlGitHubOrg(): Promise<number> {
+  const org  = GITHUB_ORGS[_orgIdx % GITHUB_ORGS.length];
+  const page = _orgMemberPage;
+
+  await waitDomain("api.github.com", SEARCH_DELAY);
+
+  const members = await ghFetch<GHOrgMember[]>(
+    `/orgs/${org}/members?per_page=30&page=${page}`
+  );
+
+  if (!members?.length) {
+    _orgIdx++;
+    _orgMemberPage = 1;
+    return 0;
+  }
+
+  _orgMemberPage++;
+  if (_orgMemberPage > 3) { _orgIdx++; _orgMemberPage = 1; }
+
+  return await processGitHubUsers(members);
 }
 
-function enqueue(item: QueueItem) {
-  if (_visitedUrls.has(item.url)) return;
-  if (_queue.length >= MAX_QUEUE) _queue = _queue.slice(0, MAX_QUEUE - 1); // drop lowest-priority tail
-  // insert by priority (simple push + sort is fine at this scale)
-  _queue.push(item);
-  _queue.sort((a, b) => b.priority - a.priority);
+// ── GitHub: process user stubs → fetch detail → save ─────────────────────────
+
+async function processGitHubUsers(stubs: GHUserStub[]): Promise<number> {
+  let saved = 0;
+  for (const stub of stubs) {
+    if (_stopRequested) break;
+    if (_visited.has(stub.html_url)) continue;
+    _visited.add(stub.html_url);
+
+    await waitDomain("api.github.com", 300); // gentle per-user delay
+    const u = await ghFetch<GHUserDetail>(`/users/${stub.login}`);
+    if (!u) continue;
+
+    const name    = (u.name || u.login).trim();
+    const bio     = (u.bio ?? "").trim();
+    const company = (u.company ?? "").replace(/^@/, "").trim();
+    const title   = inferTitle(bio, u.followers);
+
+    const profile: IndexedProfile = {
+      id: `gh-${u.login}`,
+      name,
+      title,
+      company,
+      location: u.location ?? "",
+      bio,
+      skills: extractSkills(`${bio} ${company} ${title}`),
+      email: u.email ?? "",
+      githubUrl: u.html_url,
+      linkedinUrl: "",
+      sourceUrl: u.html_url,
+      sourceName: "github",
+      indexedAt: new Date().toISOString(),
+    };
+
+    if (appendProfile(profile)) {
+      saved++;
+      _stats.profiles++;
+      recordFind(profile);
+    }
+    _stats.pages++;
+  }
+  return saved;
 }
 
-// ── robots.txt cache ──────────────────────────────────────────────────────────
-
-const _robotsCache = new Map<string, string[]>();
+// ── robots.txt ────────────────────────────────────────────────────────────────
 
 async function getDisallowed(origin: string): Promise<string[]> {
   if (_robotsCache.has(origin)) return _robotsCache.get(origin)!;
   try {
     const res = await fetch(`${origin}/robots.txt`, {
-      headers: { "User-Agent": "sodacircle-crawler/1.0" },
+      headers: { "User-Agent": "sodacircle-recruiter/1.0" },
       signal: AbortSignal.timeout(5000),
     });
-    if (!res.ok) { _robotsCache.set(origin, []); return []; }
-    const text = await res.text();
     const disallowed: string[] = [];
-    let inOurBlock = false;
-    for (const raw of text.split("\n")) {
-      const line = raw.trim();
-      if (line.toLowerCase().startsWith("user-agent:")) {
-        const agent = line.slice(11).trim();
-        inOurBlock = agent === "*";
-      } else if (inOurBlock && line.toLowerCase().startsWith("disallow:")) {
-        const path = line.slice(9).trim();
-        if (path) disallowed.push(path);
+    if (res.ok) {
+      let inBlock = false;
+      for (const line of (await res.text()).split("\n")) {
+        const l = line.trim();
+        if (/^user-agent:/i.test(l)) inBlock = l.toLowerCase().includes("*");
+        else if (inBlock && /^disallow:/i.test(l)) {
+          const p = l.replace(/^disallow:\s*/i, "").trim();
+          if (p) disallowed.push(p);
+        }
       }
     }
     _robotsCache.set(origin, disallowed);
@@ -225,384 +335,269 @@ async function getDisallowed(origin: string): Promise<string[]> {
   }
 }
 
-function isAllowed(pathname: string, disallowed: string[]): boolean {
+function allowed(pathname: string, disallowed: string[]): boolean {
   return !disallowed.some((d) => d && pathname.startsWith(d));
-}
-
-// ── GitHub crawling ───────────────────────────────────────────────────────────
-
-interface GHUser {
-  login: string;
-  html_url: string;
-  url: string;
-}
-
-interface GHUserDetail {
-  login: string;
-  name: string | null;
-  bio: string | null;
-  company: string | null;
-  location: string | null;
-  email: string | null;
-  html_url: string;
-  blog: string | null;
-  public_repos: number;
-  followers: number;
-}
-
-async function crawlGitHubBatch(): Promise<number> {
-  const query = GITHUB_QUERIES[_githubQueryIndex % GITHUB_QUERIES.length];
-  const page  = _githubPageIndex;
-
-  await waitForDomain("api.github.com", GITHUB_DELAY);
-
-  const searchUrl = `${GITHUB_API}/search/users?q=${encodeURIComponent(query)}&per_page=30&page=${page}`;
-  const result = await fetchJson<{ items: GHUser[]; total_count: number }>(searchUrl);
-
-  if (!result?.items?.length) {
-    // Move to next query
-    _githubQueryIndex++;
-    _githubPageIndex = 1;
-    return 0;
-  }
-
-  // Advance page; wrap after 10 pages per query
-  _githubPageIndex++;
-  if (_githubPageIndex > 10) {
-    _githubQueryIndex++;
-    _githubPageIndex = 1;
-  }
-
-  let saved = 0;
-  for (const user of result.items) {
-    if (_stopRequested) break;
-    if (_visitedUrls.has(user.html_url)) continue;
-    _visitedUrls.add(user.html_url);
-
-    await waitForDomain("api.github.com", GITHUB_DELAY);
-    const detail = await fetchJson<GHUserDetail>(user.url);
-    if (!detail) continue;
-
-    const name = detail.name || detail.login;
-    const bio  = detail.bio ?? "";
-
-    // Heuristic title from bio
-    const titleMatch = bio.match(/(?:senior\s+|lead\s+|staff\s+|principal\s+)?(?:software|fullstack|full.stack|frontend|backend|platform|infra|devops|ml|data|ai|mobile|ios|android|cloud)?\s*(?:engineer|developer|architect|scientist|researcher|cto|vp|director|founder|co-founder)/i);
-    const title = titleMatch ? titleMatch[0].trim() : (detail.followers > 200 ? "Software Engineer" : "Developer");
-
-    const company = (detail.company ?? "").replace(/^@/, "").trim();
-
-    const profile: IndexedProfile = {
-      id: `gh-${detail.login}`,
-      name,
-      title,
-      company,
-      location: detail.location ?? "",
-      bio,
-      skills: extractSkillsFromBio(bio),
-      email: detail.email ?? "",
-      githubUrl: detail.html_url,
-      linkedinUrl: "",
-      sourceUrl: detail.html_url,
-      sourceName: "github",
-      indexedAt: new Date().toISOString(),
-    };
-
-    if (appendProfile(profile)) {
-      saved++;
-      _stats.profiles++;
-      recordFind(profile);
-    }
-  }
-
-  _stats.pages++;
-  return saved;
-}
-
-function extractSkillsFromBio(bio: string): string[] {
-  const known = [
-    // Languages — weighted toward ConductorOne's stack
-    "go","golang","rust","typescript","javascript","python","java","kotlin","swift",
-    // Identity & access management
-    "iam","identity","access management","zero trust","sso","saml","oauth","oidc","scim",
-    "okta","azure ad","active directory","ldap","ping identity","sailpoint","cyberark","saviynt",
-    "identity governance","privileged access","pam","just-in-time","jit access",
-    "entitlements","rbac","abac","access governance","iga",
-    // Security
-    "security","appsec","soc","siem","devsecops","zero trust","compliance","soc2","sox","hipaa",
-    // Cloud / infra
-    "aws","gcp","azure","kubernetes","k8s","docker","terraform","pulumi","helm","ci/cd",
-    "platform engineering","devops","sre","infrastructure",
-    // Backend / API
-    "grpc","graphql","rest","protobuf","microservices","distributed systems","api",
-    "postgresql","postgres","mysql","mongodb","redis","dynamodb","spanner",
-    // Frameworks
-    "react","nextjs","vue","angular",
-    "node","nodejs","express","fastapi","django","rails",
-  ];
-  const lower = bio.toLowerCase();
-  return known.filter((s) => lower.includes(s)).slice(0, 10);
 }
 
 // ── Web crawling ──────────────────────────────────────────────────────────────
 
-// People-page path patterns
-const PEOPLE_PATHS = [
-  "/team", "/about", "/people", "/about/team", "/company/team",
-  "/about-us", "/our-team", "/staff", "/crew", "/founders",
-  "/contributors", "/members", "/directory",
-];
+async function crawlWebPage(url: string): Promise<number> {
+  let parsed: URL;
+  try { parsed = new URL(url); } catch { return 0; }
 
-// Link patterns that suggest a personal profile page
-const PROFILE_URL_RE = /\/(people|team|about|profile|user|u|@)\/[^/?#]{2,}/i;
+  const disallowed = await getDisallowed(parsed.origin);
+  if (!allowed(parsed.pathname, disallowed)) return 0;
 
-async function crawlWebUrl(url: string): Promise<number> {
-  const { origin, pathname } = new URL(url);
-  const domain = getDomain(url);
+  await waitDomain(domain(url), WEB_DELAY);
 
-  const disallowed = await getDisallowed(origin);
-  if (!isAllowed(pathname, disallowed)) return 0;
-
-  await waitForDomain(domain, WEB_DELAY);
-
-  const html = await fetchHtml(url);
-  if (!html) { _stats.errors++; return 0; }
-
-  const text = cleanHtml(html);
-  _stats.pages++;
-
-  // Extract profiles with Claude if API key available
-  let saved = 0;
-  if (process.env.ANTHROPIC_API_KEY) {
-    saved = await extractAndSaveWithClaude(text, url);
-  } else {
-    saved = extractAndSaveHeuristic(text, url);
-  }
-
-  // Discover more URLs from this page
-  discoverLinks(html, origin, disallowed);
-
-  return saved;
-}
-
-async function callClaude(prompt: string): Promise<string> {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-api-key": process.env.ANTHROPIC_API_KEY ?? "",
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 1024,
-      messages: [{ role: "user", content: prompt }],
-    }),
-    signal: AbortSignal.timeout(20000),
-  });
-  if (!res.ok) throw new Error(`Claude API ${res.status}`);
-  const data = await res.json() as { content: Array<{ type: string; text: string }> };
-  return data.content[0]?.text?.trim() ?? "";
-}
-
-async function extractAndSaveWithClaude(text: string, sourceUrl: string): Promise<number> {
+  let html: string;
   try {
-    const raw = await callClaude(`Extract people profiles from this page. Return JSON array of objects with fields:
-name, title, company, location, bio, skills (array), email, githubUrl, linkedinUrl.
-Only include real people with at least a name and title/role. Return [] if none found.
-Return ONLY the JSON array, no markdown.
-
-Page URL: ${sourceUrl}
-Page content:
-${text}`);
-
-    const clean = raw.replace(/^```json?\s*/i, "").replace(/```\s*$/i, "");
-    const people = JSON.parse(clean) as Array<Partial<IndexedProfile>>;
-    if (!Array.isArray(people)) return 0;
-
-    let saved = 0;
-    for (const p of people) {
-      if (!p.name?.trim()) continue;
-      const profile: IndexedProfile = {
-        id: `web-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        name: p.name.trim(),
-        title: p.title ?? "",
-        company: p.company ?? getDomain(sourceUrl),
-        location: p.location ?? "",
-        bio: p.bio ?? "",
-        skills: Array.isArray(p.skills) ? p.skills : [],
-        email: p.email ?? "",
-        githubUrl: p.githubUrl ?? "",
-        linkedinUrl: p.linkedinUrl ?? "",
-        sourceUrl,
-        sourceName: "web",
-        indexedAt: new Date().toISOString(),
-      };
-      if (appendProfile(profile)) { saved++; _stats.profiles++; recordFind(profile); }
-    }
-    return saved;
+    const res = await fetch(url, {
+      headers: { "User-Agent": "sodacircle-recruiter/1.0", Accept: "text/html" },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) { _stats.errors++; return 0; }
+    const ct = res.headers.get("content-type") ?? "";
+    if (!ct.includes("html")) return 0;
+    html = await res.text();
   } catch {
+    _stats.errors++;
     return 0;
   }
+
+  _stats.pages++;
+  const saved = extractPeopleFromHtml(html, url);
+  discoverLinks(html, parsed.origin, disallowed);
+  return saved;
 }
 
-function extractAndSaveHeuristic(text: string, sourceUrl: string): number {
-  // Very basic: look for "Name — Title at Company" patterns
-  const patterns = [
-    /([A-Z][a-z]+ [A-Z][a-z]+)\s*[—–-]\s*([^,\n]{5,60})/g,
-    /([A-Z][a-z]+ [A-Z][a-z]+),\s*((?:Senior|Lead|Staff|Principal|Head of|VP|Director|CTO|CEO|Founder)[^,\n]{0,60})/g,
+// ── Cheerio-based people extraction ──────────────────────────────────────────
+
+function extractPeopleFromHtml(html: string, sourceUrl: string): number {
+  const $ = cheerio.load(html);
+  let saved = 0;
+
+  // Remove noise
+  $("script, style, nav, footer, header, aside, .cookie, .banner, .ad").remove();
+
+  // Strategy 1: structured team cards (common on company team pages)
+  // Look for repeated card-like containers with a name heading
+  const cardSelectors = [
+    ".team-member", ".team-card", ".person-card", ".employee", ".staff-member",
+    ".speaker-card", ".contributor", "[class*='team-item']", "[class*='member-card']",
+    "[class*='person-item']", "[class*='profile-card']",
+    "article", ".card", ".bio", "[class*='-bio']",
   ];
 
-  let saved = 0;
-  for (const re of patterns) {
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(text)) !== null) {
-      const name = m[1].trim();
-      const titleRaw = m[2].trim();
-      // quick noise filter
-      if (name.split(" ").length < 2) continue;
-      if (titleRaw.length < 3) continue;
+  for (const sel of cardSelectors) {
+    const cards = $(sel).toArray();
+    if (cards.length < 2 || cards.length > 200) continue; // skip if too few or clearly not people
+
+    for (const card of cards) {
+      const el = $(card);
+      // Name: look for heading or strong text
+      const nameEl = el.find("h1, h2, h3, h4, strong, b, .name, [class*='name']").first();
+      const name = nameEl.text().trim();
+      if (!name || name.length < 3 || name.length > 80) continue;
+      if (!isLikelyPersonName(name)) continue;
+
+      // Title
+      const titleEl = el.find(".title, .role, .position, .job-title, [class*='title'], [class*='role'], em, small").first();
+      const title = titleEl.text().trim().slice(0, 120);
+
+      // Bio
+      const bioEl = el.find("p, .bio, .description, [class*='bio']").first();
+      const bio   = bioEl.text().trim().slice(0, 500);
+
+      // Links
+      const ghLink    = el.find("a[href*='github.com']").attr("href") ?? "";
+      const liLink    = el.find("a[href*='linkedin.com/in']").attr("href") ?? "";
+      const emailLink = el.find("a[href^='mailto:']").attr("href")?.replace("mailto:", "") ?? "";
 
       const profile: IndexedProfile = {
-        id: `web-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        id: `web-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         name,
-        title: titleRaw.split(" at ")[0].trim(),
-        company: titleRaw.includes(" at ") ? titleRaw.split(" at ")[1].trim() : getDomain(sourceUrl),
+        title,
+        company: new URL(sourceUrl).hostname.replace(/^www\./, ""),
         location: "",
-        bio: "",
-        skills: [],
-        email: "",
-        githubUrl: "",
-        linkedinUrl: "",
+        bio,
+        skills: extractSkills(`${title} ${bio}`),
+        email: emailLink,
+        githubUrl: ghLink,
+        linkedinUrl: liLink,
         sourceUrl,
         sourceName: "web",
         indexedAt: new Date().toISOString(),
       };
+
       if (appendProfile(profile)) { saved++; _stats.profiles++; recordFind(profile); }
     }
+
+    if (saved > 0) return saved; // found profiles with this selector, don't double-count
   }
+
+  // Strategy 2: GitHub trending page — extract trending repos/users
+  if (sourceUrl.includes("github.com/trending")) {
+    $("article.Box-row").each((_, el) => {
+      const link = $(el).find("h2 a").attr("href") ?? "";
+      if (!link) return;
+      const full = `https://github.com${link}`;
+      // Queue both the user profile and org
+      if (!link.includes("/")) return;
+      const parts = link.split("/").filter(Boolean);
+      if (parts.length >= 1) {
+        enqueue(`https://github.com/${parts[0]}`, 8);
+        // Will be processed as a GitHub API call next time we see it
+      }
+    });
+    return 0; // profiles come from the API, not this page
+  }
+
   return saved;
+}
+
+function isLikelyPersonName(s: string): boolean {
+  // Must have 2+ words, each starting with a capital (or common name patterns)
+  const words = s.trim().split(/\s+/);
+  if (words.length < 2 || words.length > 5) return false;
+  // At least first word starts with capital
+  if (!/^[A-Z]/.test(words[0])) return false;
+  // Not all caps (would be a heading/button)
+  if (s === s.toUpperCase()) return false;
+  // No numbers, no special chars except hyphens/apostrophes
+  if (/[0-9@#$%^&*()=+\[\]{}<>|/\\]/.test(s)) return false;
+  return true;
 }
 
 function discoverLinks(html: string, origin: string, disallowed: string[]) {
-  const hrefRe = /href=["']([^"']+)["']/gi;
-  let m: RegExpExecArray | null;
-  let added = 0;
-  while ((m = hrefRe.exec(html)) !== null && added < 30) {
+  const $ = cheerio.load(html);
+  $("a[href]").each((_, el) => {
+    if (_queue.length >= MAX_QUEUE) return false; // stop iterating
     try {
-      const raw = m[1];
-      const resolved = raw.startsWith("http") ? raw : new URL(raw, origin).href;
+      const href = $(el).attr("href") ?? "";
+      const resolved = href.startsWith("http") ? href : new URL(href, origin).href;
       const u = new URL(resolved);
-      if (u.hostname !== new URL(origin).hostname) continue; // same-origin only for now
-      if (!isAllowed(u.pathname, disallowed)) continue;
-      if (_visitedUrls.has(resolved)) continue;
-      if (PROFILE_URL_RE.test(u.pathname) || PEOPLE_PATHS.some((p) => u.pathname === p || u.pathname.startsWith(p + "/"))) {
-        enqueue({ url: resolved, source: "web", priority: 5 });
-        added++;
+      if (u.hostname !== new URL(origin).hostname) return; // same-origin only
+      if (!allowed(u.pathname, disallowed)) return;
+      if (_visited.has(resolved)) return;
+
+      const path = u.pathname.toLowerCase();
+      const isPeoplePath = /\/(team|about|people|staff|crew|founders|contributors|members|speakers|bios|directory|profiles)/.test(path);
+      const isProfilePath = /\/(team|people|staff|speakers|contributors)\/[^/?#]{2,}/.test(path);
+
+      if (isPeoplePath || isProfilePath) {
+        enqueue(resolved, isProfilePath ? 8 : 6);
       }
-    } catch { /* ignore malformed URLs */ }
-  }
+    } catch { /* ignore */ }
+  });
 }
 
-// ── Crawler loop ──────────────────────────────────────────────────────────────
+// ── GitHub profile URL handler (from queue) ───────────────────────────────────
+
+async function processGitHubProfileUrl(url: string): Promise<number> {
+  // e.g. https://github.com/someuser
+  const match = url.match(/^https:\/\/github\.com\/([^/?#]+)$/);
+  if (!match) return 0;
+  const login = match[1];
+  if (["trending", "orgs", "topics", "explore", "marketplace"].includes(login)) return 0;
+
+  await waitDomain("api.github.com", 300);
+  const u = await ghFetch<GHUserDetail>(`/users/${login}`);
+  if (!u || !u.name) return 0;
+
+  _visited.add(url);
+  const bio     = (u.bio ?? "").trim();
+  const company = (u.company ?? "").replace(/^@/, "").trim();
+
+  const profile: IndexedProfile = {
+    id: `gh-${u.login}`,
+    name: u.name.trim(),
+    title: inferTitle(bio, u.followers),
+    company,
+    location: u.location ?? "",
+    bio,
+    skills: extractSkills(`${bio} ${company}`),
+    email: u.email ?? "",
+    githubUrl: u.html_url,
+    linkedinUrl: "",
+    sourceUrl: u.html_url,
+    sourceName: "github",
+    indexedAt: new Date().toISOString(),
+  };
+
+  _stats.pages++;
+  if (appendProfile(profile)) { _stats.profiles++; recordFind(profile); return 1; }
+  return 0;
+}
+
+// ── Main loop ────────────────────────────────────────────────────────────────
 
 async function crawlLoop() {
-  // Hydrate visited set from disk
-  _visitedUrls = loadVisited();
+  _visited = loadVisited();
 
-  // Seed the web queue
-  for (const seed of WEB_SEEDS) {
-    enqueue({ url: seed, source: "web", priority: 10 });
-  }
+  for (const seed of WEB_SEEDS) enqueue(seed, 9);
 
-  // Also enqueue common team/about pages for known tech companies
-  // Identity / security / infra companies whose team pages often list engineers
-  const techCompanies = [
-    "https://www.hashicorp.com/company",
-    "https://www.paloaltonetworks.com/about-us",
-    "https://www.crowdstrike.com/about-us/",
-    "https://snyk.io/about/",
-    "https://auth0.com/about",
-    "https://www.teleport.dev/about",
-    "https://infisical.com/about",
-    "https://www.doppler.com/about",
-    "https://goteleport.com/about",
-    "https://boundary.hashicorp.com",
-    "https://www.beyondidentity.com/about",
-    "https://workos.com/about",
-    "https://stytch.com/about",
-    "https://clerk.com/about",
-    "https://www.strongdm.com/company",
-    "https://www.trustvault.io/about",
-  ];
-  for (const u of techCompanies) enqueue({ url: u, source: "web", priority: 8 });
+  const saved = readState();
+  _stats.pages    = saved.pagesVisited;
+  _stats.profiles = saved.profilesFound;
+  _stats.errors   = saved.errors;
+  _recentFinds    = saved.recentFinds ?? [];
 
   writeState({
-    running: true,
-    startedAt: new Date().toISOString(),
-    stoppedAt: null,
-    pagesVisited: 0,
-    profilesFound: 0,
-    errors: 0,
-    queueDepth: _queue.length,
-    recentFinds: [],
-    lastActivity: new Date().toISOString(),
+    running: true, startedAt: new Date().toISOString(), stoppedAt: null,
+    pagesVisited: _stats.pages, profilesFound: _stats.profiles, errors: _stats.errors,
+    queueDepth: _queue.length, recentFinds: _recentFinds, lastActivity: new Date().toISOString(),
   });
 
   while (!_stopRequested) {
     _iteration++;
 
-    // Alternate: every 3 iterations do GitHub, otherwise web
-    const doGitHub = _iteration % 3 !== 0 && GITHUB_QUERIES.length > 0;
-
     try {
-      if (doGitHub) {
-        await crawlGitHubBatch();
+      // Cycle: 2× GitHub search, 1× org members, 1× web page
+      const phase = _iteration % 4;
+
+      if (phase === 0) {
+        await crawlGitHubOrg();
+      } else if (phase === 1 || phase === 3) {
+        await crawlGitHubSearch();
       } else {
+        // Web or GitHub profile URL from queue
         const item = _queue.shift();
         if (!item) {
-          // Queue empty — re-seed
-          for (const seed of WEB_SEEDS) enqueue({ url: seed, source: "web", priority: 10 });
-          await sleep(5000);
+          for (const seed of WEB_SEEDS) enqueue(seed, 9);
+          await sleep(3000);
           continue;
         }
-        if (!_visitedUrls.has(item.url)) {
-          _visitedUrls.add(item.url);
-          await crawlWebUrl(item.url);
+        _visited.add(item.url);
+        if (item.url.startsWith("https://github.com/")) {
+          await processGitHubProfileUrl(item.url);
+        } else {
+          await crawlWebPage(item.url);
         }
       }
     } catch (err) {
       _stats.errors++;
+      console.error("[crawler]", err);
     }
 
-    // Persist state periodically
     if (_iteration % SAVE_EVERY === 0) {
-      saveVisited(_visitedUrls);
+      saveVisited(_visited);
       writeState({
-        pagesVisited: _stats.pages,
-        profilesFound: _stats.profiles,
-        errors: _stats.errors,
-        queueDepth: _queue.length,
-        recentFinds: _recentFinds,
-        lastActivity: new Date().toISOString(),
+        pagesVisited: _stats.pages, profilesFound: _stats.profiles,
+        errors: _stats.errors, queueDepth: _queue.length,
+        recentFinds: _recentFinds, lastActivity: new Date().toISOString(),
       });
     }
 
-    // Small gap between iterations
-    await sleep(500);
+    await sleep(200);
   }
 
-  // Clean shutdown
-  saveVisited(_visitedUrls);
+  saveVisited(_visited);
   writeState({
-    running: false,
-    stoppedAt: new Date().toISOString(),
-    pagesVisited: _stats.pages,
-    profilesFound: _stats.profiles,
-    errors: _stats.errors,
-    queueDepth: _queue.length,
-    recentFinds: _recentFinds,
-    lastActivity: new Date().toISOString(),
+    running: false, stoppedAt: new Date().toISOString(),
+    pagesVisited: _stats.pages, profilesFound: _stats.profiles,
+    errors: _stats.errors, queueDepth: _queue.length,
+    recentFinds: _recentFinds, lastActivity: new Date().toISOString(),
   });
 
   _running = false;
@@ -615,43 +610,22 @@ export function startCrawler() {
   if (_running) return;
   _running = true;
   _stopRequested = false;
-  _stats = { pages: 0, profiles: 0, errors: 0 };
-
-  // Restore stats from persisted state so they accumulate across restarts
-  const saved = readState();
-  _stats.pages    = saved.pagesVisited;
-  _stats.profiles = saved.profilesFound;
-  _stats.errors   = saved.errors;
-  _recentFinds    = saved.recentFinds ?? [];
-
-  crawlLoop().catch(() => {
+  crawlLoop().catch((err) => {
+    console.error("[crawler] fatal", err);
     _running = false;
     writeState({ running: false, stoppedAt: new Date().toISOString() });
   });
 }
 
-export function stopCrawler() {
-  _stopRequested = true;
-}
-
-export function isCrawlerRunning(): boolean {
-  return _running;
-}
+export function stopCrawler() { _stopRequested = true; }
+export function isCrawlerRunning(): boolean { return _running; }
 
 export function getCrawlerStatus() {
-  return {
-    running: _running,
-    queueDepth: _queue.length,
-    stats: { ..._stats },
-    recentFinds: [..._recentFinds],
-  };
+  return { running: _running, queueDepth: _queue.length, stats: { ..._stats }, recentFinds: [..._recentFinds] };
 }
 
 export function addSeedUrls(urls: string[]) {
   for (const url of urls) {
-    try {
-      new URL(url); // validate
-      enqueue({ url, source: "web", priority: 9 });
-    } catch { /* skip invalid */ }
+    try { new URL(url); enqueue(url, 9); } catch { /* skip invalid */ }
   }
 }

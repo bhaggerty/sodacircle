@@ -209,7 +209,7 @@ export default function AgentsPage() {
         <span className="page-eyebrow">Automation layer</span>
         <h1 className="page-title">Agents</h1>
         <p className="page-subtitle">
-          Always-on workers that source candidates, handle scheduling, and collect interview feedback.
+          Always-on workers that source and index candidates from across the internet.
         </p>
       </div>
 
